@@ -22,8 +22,9 @@ import (
 	prtp "github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 
-	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/protocol/logger"
+
+	"github.com/livekit/media-sdk/rtp"
 )
 
 var defaultProfiles = []ProtectionProfile{
@@ -132,6 +133,10 @@ func (s *session) Close() error {
 
 type writeStream struct {
 	w *srtp.WriteStreamSRTP
+}
+
+func (w writeStream) String() string {
+	return "SRTPWriteStream"
 }
 
 func (w writeStream) WriteRTP(h *prtp.Header, payload []byte) (int, error) {

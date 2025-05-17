@@ -16,13 +16,13 @@ require (
 	github.com/pion/sdp/v3 v3.0.11
 	github.com/pion/srtp/v3 v3.0.4
 	github.com/pion/webrtc/v4 v4.0.15
+	golang.org/x/exp v0.0.0-20250128182459-e0ece0dbea4c
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
 )
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gammazero/deque v1.0.0 // indirect
-	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
