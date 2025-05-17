@@ -27,21 +27,23 @@ const (
 )
 
 func HandleJitter(h Handler) Handler {
-	out := make(chan []*rtp.Packet, 10)
 	handler := &jitterHandler{
 		h:   h,
-		buf: jitter.NewBuffer(audioDepacketizer{}, jitterMaxLatency, out),
-		out: out,
 		err: make(chan error, 1),
 	}
-	go handler.run()
+	// Jitter buffer expects to be closed (to stop the timer), but handler interface doesn't allow it.
+	// This should be fine, because GC can now collect timers and goroutines blocked on them if they are not referenced.
+	handler.buf = jitter.NewBuffer(audioDepacketizer{}, jitterMaxLatency, func(packets []*rtp.Packet) {
+		for _, p := range packets {
+			handler.handleRTP(p)
+		}
+	})
 	return handler
 }
 
 type jitterHandler struct {
 	h   Handler
 	buf *jitter.Buffer
-	out chan []*rtp.Packet
 	err chan error
 }
 
@@ -49,29 +51,25 @@ func (r *jitterHandler) String() string {
 	return "Jitter -> " + r.h.String()
 }
 
-func (r *jitterHandler) HandleRTP(h *rtp.Header, payload []byte) error {
-	r.buf.Push(&rtp.Packet{Header: *h, Payload: payload})
+func (r *jitterHandler) handleRTP(p *rtp.Packet) {
+	if err := r.h.HandleRTP(&p.Header, p.Payload); err != nil {
+		select {
+		case r.err <- err:
+			// error pushed
+		default:
+			// error channel is full, don't block
+		}
+	}
+}
 
+func (r *jitterHandler) HandleRTP(h *rtp.Header, payload []byte) error {
+	// This may call handleRTP, possibly multiple times.
+	r.buf.Push(&rtp.Packet{Header: *h, Payload: payload})
 	select {
 	case err := <-r.err:
 		return err
 	default:
 		return nil
-	}
-}
-
-func (r *jitterHandler) run() {
-	for sample := range r.out {
-		for _, pkt := range sample {
-			if err := r.h.HandleRTP(&pkt.Header, pkt.Payload); err != nil {
-				select {
-				case r.err <- err:
-					// error pushed
-				default:
-					// error channel is full, don't block
-				}
-			}
-		}
 	}
 }
 

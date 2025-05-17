@@ -26,9 +26,19 @@ import (
 
 const testBufferLatency = 800 * time.Millisecond
 
+func chanFunc(t testing.TB, out chan<- []*rtp.Packet) PacketFunc {
+	return func(packets []*rtp.Packet) {
+		select {
+		case out <- packets:
+		default:
+			t.Error("buffer is full")
+		}
+	}
+}
+
 func TestJitterBuffer(t *testing.T) {
 	out := make(chan []*rtp.Packet, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, out)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
 	s := newTestStream()
 
 	i := 0
@@ -48,7 +58,7 @@ func TestJitterBuffer(t *testing.T) {
 
 func TestSamples(t *testing.T) {
 	out := make(chan []*rtp.Packet, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, out)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
 	s := newTestStream()
 
 	i := 0
@@ -71,7 +81,7 @@ func TestSamples(t *testing.T) {
 
 func TestJitter(t *testing.T) {
 	out := make(chan []*rtp.Packet, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, out)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
 	s := newTestStream()
 
 	i := 0
@@ -105,7 +115,7 @@ func TestJitter(t *testing.T) {
 
 func TestDiscontinuity(t *testing.T) {
 	out := make(chan []*rtp.Packet, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, out)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
 	s := newTestStream()
 
 	i := 0
@@ -130,7 +140,7 @@ func TestDiscontinuity(t *testing.T) {
 
 func TestLostPackets(t *testing.T) {
 	out := make(chan []*rtp.Packet, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, out)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
 	s := newTestStream()
 
 	i := 0
@@ -164,7 +174,7 @@ func TestLostPackets(t *testing.T) {
 
 func TestDroppedPackets(t *testing.T) {
 	out := make(chan []*rtp.Packet, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, out)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
 	s := newTestStream()
 
 	i := 0

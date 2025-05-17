@@ -27,8 +27,8 @@ import (
 type Buffer struct {
 	depacketizer rtp.Depacketizer
 	latency      time.Duration
-	out          chan []*rtp.Packet
 	logger       logger.Logger
+	onPacket     PacketFunc
 	onPacketLoss func()
 
 	mu sync.Mutex
@@ -56,19 +56,21 @@ type BufferStats struct {
 	SamplesPopped  uint64 // samples sent to handler
 }
 
+type PacketFunc func(packets []*rtp.Packet)
+
 func NewBuffer(
 	depacketizer rtp.Depacketizer,
 	latency time.Duration,
-	out chan []*rtp.Packet,
+	fnc PacketFunc,
 	opts ...Option,
 ) *Buffer {
 	b := &Buffer{
 		depacketizer: depacketizer,
 		latency:      latency,
-		out:          out,
 		logger:       logger.LogRLogger(logr.Discard()),
 		stats:        &BufferStats{},
 		timer:        time.NewTimer(latency),
+		onPacket:     fnc,
 	}
 	for _, opt := range opts {
 		opt(b)
@@ -267,14 +269,7 @@ func (b *Buffer) popReady() {
 		}
 
 		if sample := b.popSample(); len(sample) > 0 {
-			select {
-			case b.out <- sample:
-				// ok
-			default:
-				b.logger.Warnw("buffer full, dropping sample", nil)
-				loss = true
-				b.stats.PacketsDropped += uint64(len(sample))
-			}
+			b.onPacket(sample)
 		}
 	}
 
