@@ -45,6 +45,10 @@ type jitterHandler struct {
 	err chan error
 }
 
+func (r *jitterHandler) String() string {
+	return "Jitter -> " + r.h.String()
+}
+
 func (r *jitterHandler) HandleRTP(h *rtp.Header, payload []byte) error {
 	r.buf.Push(&rtp.Packet{Header: *h, Payload: payload})
 

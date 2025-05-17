@@ -18,6 +18,8 @@ import (
 	"github.com/livekit/media-sdk"
 )
 
+// WARNING: Do NOT change the constants because other services depend on it.
+
 const (
 	// DefClockRate is a default clock rate at which RTP timestamps increment.
 	DefClockRate = 8000
