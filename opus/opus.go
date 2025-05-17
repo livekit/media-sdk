@@ -22,10 +22,11 @@ import (
 
 	"gopkg.in/hraban/opus.v2"
 
+	"github.com/livekit/protocol/logger"
+
 	"github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/webm"
-	"github.com/livekit/protocol/logger"
 )
 
 /*
@@ -80,6 +81,7 @@ type decoder struct {
 	w      media.PCM16Writer
 	dec    *opus.Decoder
 	buf    media.PCM16Sample
+	buf2   media.PCM16Sample
 	logger logger.Logger
 
 	targetChannels int
@@ -116,9 +118,19 @@ func (d *decoder) WriteSample(in Sample) error {
 
 	returnData := d.buf[:n*channels]
 	if channels < d.targetChannels {
-		returnData = monoToStereo(returnData)
+		n2 := len(returnData) * 2
+		if len(d.buf2) < n2 {
+			d.buf2 = make(media.PCM16Sample, n2)
+		}
+		media.MonoToStereo(d.buf2, returnData)
+		returnData = d.buf2[:n2]
 	} else if channels > d.targetChannels {
-		returnData = stereoToMono(returnData)
+		n2 := len(returnData) / 2
+		if len(d.buf2) < n2 {
+			d.buf2 = make(media.PCM16Sample, n2)
+		}
+		media.StereoToMono(d.buf2, returnData)
+		returnData = d.buf2[:n2]
 	}
 
 	return d.w.WriteSample(returnData)
@@ -173,27 +185,6 @@ func (e *encoder) Close() error {
 	return e.w.Close()
 }
 
-func NewWebmWriter(w io.WriteCloser, sampleRate int, sampleDur time.Duration) media.WriteCloser[Sample] {
-	return webm.NewWriter[Sample](w, "A_OPUS", 2, sampleRate, sampleDur)
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-
-func monoToStereo(in media.PCM16Sample) media.PCM16Sample {
-	// duplicate mono samples to both channels
-	out := make(media.PCM16Sample, len(in)*2)
-	for i := range in {
-		out[i*2] = in[i]
-		out[i*2+1] = in[i]
-	}
-	return out
-}
-
-func stereoToMono(in media.PCM16Sample) media.PCM16Sample {
-	// average stereo samples to mono
-	out := make(media.PCM16Sample, len(in)/2)
-	for i := range out {
-		out[i] = (in[i*2] + in[i*2+1]) / 2
-	}
-	return out
+func NewWebmWriter(w io.WriteCloser, sampleRate int, channels int, sampleDur time.Duration) media.WriteCloser[Sample] {
+	return webm.NewWriter[Sample](w, "A_OPUS", channels, sampleRate, sampleDur)
 }

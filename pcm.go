@@ -201,3 +201,29 @@ func (w *sampleWriter[T]) WriteSample(in T) error {
 	copy(data, in)
 	return w.w.WriteSample(media.Sample{Data: data, Duration: w.sampleDur})
 }
+
+// MonoToStereo converts mono PCM from src to stereo PCM in dst.
+// It panics if size of dst is too small. Src and dst must not overlap.
+func MonoToStereo(dst, src PCM16Sample) {
+	if len(dst) < len(src)*2 {
+		panic("dst too small")
+	}
+	// duplicate mono samples to both channels
+	for i, v := range src {
+		dst[i*2+0] = v
+		dst[i*2+1] = v
+	}
+}
+
+// StereoToMono converts stereo PCM from src to mono PCM in dst.
+// It panics if size of dst is too small. Src and dst may overlap.
+func StereoToMono(dst, src PCM16Sample) {
+	n := len(src) / 2
+	if len(dst) < n {
+		panic("dst too small")
+	}
+	// average stereo samples to mono
+	for i := range n {
+		dst[i] = (src[i*2+0] + src[i*2+1]) / 2
+	}
+}
