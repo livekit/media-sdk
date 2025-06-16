@@ -33,7 +33,7 @@ func HandleJitter(h Handler) Handler {
 	}
 	// Jitter buffer expects to be closed (to stop the timer), but handler interface doesn't allow it.
 	// This should be fine, because GC can now collect timers and goroutines blocked on them if they are not referenced.
-	handler.buf = jitter.NewBuffer(audioDepacketizer{}, jitterMaxLatency, func(packets []*rtp.Packet) {
+	handler.buf = jitter.NewBuffer(AudioDepacketizer{}, jitterMaxLatency, func(packets []*rtp.Packet) {
 		for _, p := range packets {
 			handler.handleRTP(p)
 		}
@@ -73,16 +73,16 @@ func (r *jitterHandler) HandleRTP(h *rtp.Header, payload []byte) error {
 	}
 }
 
-type audioDepacketizer struct{}
+type AudioDepacketizer struct{}
 
-func (d audioDepacketizer) Unmarshal(packet []byte) ([]byte, error) {
+func (d AudioDepacketizer) Unmarshal(packet []byte) ([]byte, error) {
 	return packet, nil
 }
 
-func (d audioDepacketizer) IsPartitionHead(payload []byte) bool {
+func (d AudioDepacketizer) IsPartitionHead(payload []byte) bool {
 	return true
 }
 
-func (d audioDepacketizer) IsPartitionTail(marker bool, payload []byte) bool {
+func (d AudioDepacketizer) IsPartitionTail(marker bool, payload []byte) bool {
 	return true
 }

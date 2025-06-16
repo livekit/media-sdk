@@ -25,7 +25,6 @@ import (
 	"github.com/livekit/protocol/logger"
 
 	"github.com/livekit/media-sdk"
-	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/webm"
 )
 
@@ -72,7 +71,7 @@ func Encode(w Writer, channels int, logger logger.Logger) (media.PCM16Writer, er
 	return &encoder{
 		w:      w,
 		enc:    enc,
-		buf:    make([]byte, w.SampleRate()/rtp.DefFramesPerSec*channels),
+		buf:    make([]byte, w.SampleRate()/media.DefFramesPerSec*channels),
 		logger: logger,
 	}, nil
 }
@@ -132,8 +131,24 @@ func (d *decoder) WriteSample(in Sample) error {
 		media.StereoToMono(d.buf2, returnData)
 		returnData = d.buf2[:n2]
 	}
-
 	return d.w.WriteSample(returnData)
+}
+
+// If FEC data is not available, it falls back to PLC automatically
+func (d *decoder) DecodeFEC(data []byte, pcm []int16) error {
+	if d.dec == nil {
+		return fmt.Errorf("decoder not initialized")
+	}
+
+	return d.dec.DecodeFEC(data, pcm)
+}
+
+func (d *decoder) DecodePLC(pcm []int16) error {
+	if d.dec == nil {
+		return fmt.Errorf("decoder not initialized")
+	}
+
+	return d.dec.DecodePLC(pcm)
 }
 
 func (d *decoder) resetForSample(in Sample) (int, error) {
@@ -147,7 +162,7 @@ func (d *decoder) resetForSample(in Sample) (int, error) {
 		}
 		d.dec = dec
 
-		d.buf = make([]int16, d.w.SampleRate()/rtp.DefFramesPerSec*channels)
+		d.buf = make([]int16, d.w.SampleRate()/media.DefFramesPerSec*channels)
 		d.lastChannels = channels
 	}
 

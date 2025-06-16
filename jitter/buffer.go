@@ -35,6 +35,7 @@ type Buffer struct {
 
 	initialized bool
 	prevSN      uint16
+	prevTS      uint32
 	head        *packet
 	tail        *packet
 
@@ -326,6 +327,7 @@ func (b *Buffer) popSample() []*rtp.Packet {
 func (b *Buffer) popHead() *packet {
 	c := b.head
 	b.prevSN = c.packet.SequenceNumber
+	b.prevTS = c.packet.Timestamp
 	b.head = c.next
 	if b.head == nil {
 		b.tail = nil
@@ -333,6 +335,14 @@ func (b *Buffer) popHead() *packet {
 		b.head.prev = nil
 	}
 	return c
+}
+
+func (b *Buffer) LastSequenceNumber() uint16 {
+	return b.prevSN
+}
+
+func (b *Buffer) LastTimestamp() uint32 {
+	return b.prevTS
 }
 
 func before(a, b uint16) bool {
