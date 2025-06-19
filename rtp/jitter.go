@@ -26,7 +26,7 @@ const (
 	jitterMaxLatency = 60 * time.Millisecond // should match mixer's target buffer size
 )
 
-func HandleJitter(h Handler) Handler {
+func HandleJitter(h Handler) HandlerCloser {
 	handler := &jitterHandler{
 		h:   h,
 		err: make(chan error, 1),
@@ -71,6 +71,10 @@ func (r *jitterHandler) HandleRTP(h *rtp.Header, payload []byte) error {
 	default:
 		return nil
 	}
+}
+
+func (r *jitterHandler) Close() {
+	r.buf.Close()
 }
 
 type audioDepacketizer struct{}
