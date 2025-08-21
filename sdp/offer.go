@@ -399,9 +399,12 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 	if !ok {
 		return nil, nil // ignore
 	}
-	keys, err := base64.StdEncoding.WithPadding(base64.StdPadding).DecodeString(skey)
+	keys, err := base64.RawStdEncoding.DecodeString(skey)
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse crypto key %q: %v", skey, err)
+		// Fallback to padded encoding if raw fails
+		if keys, err = base64.StdEncoding.DecodeString(skey); err != nil {
+			return nil, fmt.Errorf("cannot parse crypto key %q: %v", skey, err)
+		}
 	}
 	var salt []byte
 	if sp, err := prof.Parse(); err == nil {
