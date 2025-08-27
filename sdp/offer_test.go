@@ -473,3 +473,53 @@ a=rtcp-fb:* ccm tmmbr
 	},
 		v.CryptoProfiles)
 }
+
+// TestSelectCryptoSuiteTag ensures that when selecting a crypto suite from an offer/answer pair,
+// the answer uses the same crypto suite tag as the offer, per RFC 4568 section 5.1.2 and 5.1.3.
+func TestSelectCryptoSuiteTag(t *testing.T) {
+	answerProfiles := []srtp.Profile{
+		{Index: 1, Profile: "AES_CM_128_HMAC_SHA1_80"},
+		{Index: 2, Profile: "AES_CM_128_HMAC_SHA1_32"},
+		{Index: 3, Profile: "AES_256_CM_HMAC_SHA1_80"},
+		{Index: 4, Profile: "AES_256_CM_HMAC_SHA1_32"},
+	}
+
+	cases := []struct {
+		name   string
+		offer  []srtp.Profile
+		answer []srtp.Profile
+		exp    *srtp.Profile
+	}{
+		{
+			name: "First",
+			offer: []srtp.Profile{
+				{Index: 1, Profile: "AES_CM_128_HMAC_SHA1_80"},
+				{Index: 2, Profile: "AES_CM_128_HMAC_SHA1_32"},
+				{Index: 3, Profile: "AES_256_CM_HMAC_SHA1_80"},
+				{Index: 4, Profile: "AES_256_CM_HMAC_SHA1_32"},
+			},
+			answer: answerProfiles,
+			exp:    &srtp.Profile{Index: 1, Profile: "AES_CM_128_HMAC_SHA1_80"},
+		},
+		{
+			name: "Fifth",
+			offer: []srtp.Profile{
+				{Index: 1, Profile: "AEAD_AES_256_GCM"},
+				{Index: 2, Profile: "AEAD_AES_128_GCM"},
+				{Index: 3, Profile: "AES_256_CM_HMAC_SHA1_80"},
+				{Index: 4, Profile: "AES_256_CM_HMAC_SHA1_32"},
+				{Index: 5, Profile: "AES_CM_128_HMAC_SHA1_80"},
+			},
+			answer: answerProfiles,
+			exp:    &srtp.Profile{Index: 5, Profile: "AES_CM_128_HMAC_SHA1_80"},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, got, err := SelectCrypto(c.offer, c.answer, true)
+			require.NoError(t, err)
+			require.Equal(t, *c.exp, *got)
+		})
+	}
+}

@@ -539,6 +539,8 @@ func SelectCrypto(offer, answer []srtp.Profile, swap bool) (*srtp.Config, *srtp.
 			prof := &off
 			if swap {
 				prof = &ans
+				// Echo the cipher suite tag of the offer, in the answer
+				prof.Index = off.Index
 			}
 			return c, prof, nil
 		}
