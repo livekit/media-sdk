@@ -64,7 +64,7 @@ func Decode(w media.PCM16Writer, targetChannels int, logger logger.Logger) (Writ
 	}, nil
 }
 
-func Encode(w Writer, channels int, logger logger.Logger) (media.PCM16Writer, error) {
+func Encode(w Writer, channels int, useDtx bool, logger logger.Logger) (media.PCM16Writer, error) {
 	enc, err := opus.NewEncoder(w.SampleRate(), channels, opus.AppVoIP)
 	if err != nil {
 		return nil, err
@@ -73,6 +73,7 @@ func Encode(w Writer, channels int, logger logger.Logger) (media.PCM16Writer, er
 		w:      w,
 		enc:    enc,
 		buf:    make([]byte, w.SampleRate()/rtp.DefFramesPerSec*channels),
+		useDtx: useDtx,
 		logger: logger,
 	}, nil
 }
@@ -162,6 +163,7 @@ type encoder struct {
 	w      Writer
 	enc    *opus.Encoder
 	buf    Sample
+	useDtx bool
 	logger logger.Logger
 }
 
@@ -177,6 +179,13 @@ func (e *encoder) WriteSample(in media.PCM16Sample) error {
 	n, err := e.enc.Encode(in, e.buf)
 	if err != nil {
 		return err
+	}
+
+	// opus_encode() returns the number of bytes actually written to the packet.
+	// The return value can be negative, which indicates that an error has occurred.
+	// If the return value is 1 byte, then the packet does not need to be transmitted (DTX).
+	if n == 1 && e.useDtx {
+		return nil
 	}
 	return e.w.WriteSample(e.buf[:n])
 }
