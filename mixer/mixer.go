@@ -84,7 +84,11 @@ type Mixer struct {
 	stats *Stats
 }
 
-func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats) *Mixer {
+func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int) (*Mixer, error) {
+	if channels != 1 {
+		return nil, fmt.Errorf("only mono mixing is supported")
+	}
+
 	mixSize := int(time.Duration(out.SampleRate()) * bufferDur / time.Second)
 	m := newMixer(out, mixSize, st)
 	m.tickerDur = bufferDur
@@ -92,7 +96,7 @@ func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *St
 
 	go m.start()
 
-	return m
+	return m, nil
 }
 
 func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats) *Mixer {
