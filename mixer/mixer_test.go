@@ -23,6 +23,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	inputBufferMin = DefaultInputBufferFrames/2 + 1
+)
+
 func newTestWriter(buf *msdk.PCM16Sample, sampleRate int) msdk.PCM16Writer {
 	return &testWriter{
 		buf:        buf,
@@ -61,7 +65,7 @@ type testMixer struct {
 func newTestMixer(t testing.TB) *testMixer {
 	m := &testMixer{t: t}
 
-	m.Mixer = newMixer(newTestWriter(&m.sample, 8000), 5, nil)
+	m.Mixer = newMixer(newTestWriter(&m.sample, 8000), 5, nil, DefaultInputBufferFrames)
 	return m
 }
 
@@ -130,13 +134,13 @@ func TestMixer(t *testing.T) {
 		inp := m.NewInput()
 		defer inp.Close()
 
-		for i := 0; i < inputBufferFrames; i++ {
+		for i := 0; i < DefaultInputBufferFrames; i++ {
 			inp.WriteSample([]int16{0, 1, 2, 3, 4})
 		}
 
-		for i := 0; i < inputBufferFrames+3; i++ {
+		for i := 0; i < DefaultInputBufferFrames+3; i++ {
 			expected := msdk.PCM16Sample{0, 1, 2, 3, 4}
-			if i >= inputBufferFrames {
+			if i >= DefaultInputBufferFrames {
 				expected = msdk.PCM16Sample{0, 0, 0, 0, 0}
 			}
 			m.Expect(expected, "i=%d", i)
@@ -148,12 +152,12 @@ func TestMixer(t *testing.T) {
 		input := m.NewInput()
 		defer input.Close()
 
-		for i := 0; i < inputBufferFrames+3; i++ {
+		for i := 0; i < DefaultInputBufferFrames+3; i++ {
 			input.WriteSample([]int16{0, 1, 2, 3, 4})
 		}
 
 		m.mixOnce()
-		require.Equal(t, (inputBufferFrames-1)*5, input.buf.Len())
+		require.Equal(t, (DefaultInputBufferFrames-1)*5, input.buf.Len())
 	})
 
 	t.Run("buffered initially and after starving", func(t *testing.T) {
@@ -201,7 +205,7 @@ func TestMixer(t *testing.T) {
 		inp := m.NewInput()
 		defer inp.Close()
 
-		for i := 0; i < inputBufferFrames; i++ {
+		for i := 0; i < DefaultInputBufferFrames; i++ {
 			WriteSampleN(inp, i)
 		}
 
@@ -209,7 +213,7 @@ func TestMixer(t *testing.T) {
 		require.EqualValues(t, 1, m.mixCnt)
 		m.CheckSampleN(0)
 
-		const steps = inputBufferFrames/2 + 1
+		const steps = DefaultInputBufferFrames/2 + 1
 		time.Sleep(step*steps + step/2)
 		m.mixUpdate()
 		require.EqualValues(t, 1+steps, m.mixCnt)

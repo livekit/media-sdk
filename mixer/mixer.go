@@ -28,13 +28,7 @@ import (
 )
 
 const (
-	// inputBufferFrames sets max number of frames that each mixer input will allow.
-	// Sending more frames to the input will cause old one to be dropped.
-	inputBufferFrames = 5
-
-	// inputBufferMin is the minimal number of buffered frames required to start mixing.
-	// It affects inputs initially, or after they start to starve.
-	inputBufferMin = inputBufferFrames/2 + 1
+	DefaultInputBufferFrames = 5
 )
 
 type Stats struct {
@@ -81,16 +75,23 @@ type Mixer struct {
 	stopped      core.Fuse
 	mixCnt       uint
 
+	// inputBufferFrames sets max number of frames that each mixer input will allow.
+	// Sending more frames to the input will cause old one to be dropped.
+	inputBufferFrames int
+	// inputBufferMin is the minimal number of buffered frames required to start mixing.
+	// It affects inputs initially, or after they start to starve.
+	inputBufferMin int
+
 	stats *Stats
 }
 
-func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int) (*Mixer, error) {
+func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int, inputBufferFrames int) (*Mixer, error) {
 	if channels != 1 {
 		return nil, fmt.Errorf("only mono mixing is supported")
 	}
 
 	mixSize := int(time.Duration(out.SampleRate()) * bufferDur / time.Second)
-	m := newMixer(out, mixSize, st)
+	m := newMixer(out, mixSize, st, inputBufferFrames)
 	m.tickerDur = bufferDur
 	m.ticker = time.NewTicker(bufferDur)
 
@@ -99,16 +100,18 @@ func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *St
 	return m, nil
 }
 
-func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats) *Mixer {
+func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats, inputBufferFrames int) *Mixer {
 	if st == nil {
 		st = new(Stats)
 	}
 	return &Mixer{
-		out:        out,
-		sampleRate: out.SampleRate(),
-		mixBuf:     make([]int32, mixSize),
-		mixTmp:     make(msdk.PCM16Sample, mixSize),
-		stats:      st,
+		out:               out,
+		sampleRate:        out.SampleRate(),
+		mixBuf:            make([]int32, mixSize),
+		mixTmp:            make(msdk.PCM16Sample, mixSize),
+		stats:             st,
+		inputBufferFrames: inputBufferFrames,
+		inputBufferMin:    inputBufferFrames/2 + 1,
 	}
 }
 
@@ -116,7 +119,7 @@ func (m *Mixer) mixInputs() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Keep at least half of the samples buffered.
-	bufMin := inputBufferMin * len(m.mixBuf)
+	bufMin := m.inputBufferMin * len(m.mixBuf)
 	for _, inp := range m.inputs {
 		n, _ := inp.readSample(bufMin, m.mixTmp[:len(m.mixBuf)])
 		if n == 0 {
@@ -189,8 +192,8 @@ func (m *Mixer) mixUpdate() {
 	if n == 0 {
 		m.stats.ZeroMixes.Add(1)
 	}
-	if n > inputBufferFrames {
-		n = inputBufferFrames
+	if n > m.inputBufferFrames {
+		n = m.inputBufferFrames
 		// reset
 		m.lastMixEndTs = now
 	}
@@ -234,7 +237,7 @@ func (m *Mixer) NewInput() *Input {
 	inp := &Input{
 		m:          m,
 		sampleRate: m.sampleRate,
-		buf:        ringbuf.New[int16](len(m.mixBuf) * inputBufferFrames),
+		buf:        ringbuf.New[int16](len(m.mixBuf) * m.inputBufferFrames),
 		buffering:  true, // buffer some data initially
 	}
 	m.inputs = append(m.inputs, inp)
