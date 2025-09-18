@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ringbuf
+package ring
 
 import (
 	"io"
@@ -28,7 +28,7 @@ var (
 func TestBuffer(t *testing.T) {
 	t.Run("push and pop", func(t *testing.T) {
 		t.Run("empty return zero", func(t *testing.T) {
-			b := New[int](3)
+			b := NewBuffer[int](3)
 			require.Equal(t, int(0), b.Peek())
 			v, ok := b.TryPop()
 			require.False(t, ok)
@@ -37,7 +37,7 @@ func TestBuffer(t *testing.T) {
 		})
 		t.Run("populate and drain", func(t *testing.T) {
 			const size = 3
-			b := New[int](size)
+			b := NewBuffer[int](size)
 			for i := 0; i < size; i++ {
 				ok := b.TryPush(i + 1)
 				require.True(t, ok)
@@ -58,7 +58,7 @@ func TestBuffer(t *testing.T) {
 		})
 		t.Run("populate and drain no check", func(t *testing.T) {
 			const size = 3
-			b := New[int](size)
+			b := NewBuffer[int](size)
 			for i := 0; i < size; i++ {
 				b.Push(i + 1)
 				require.Equal(t, i+1, b.Len())
@@ -77,14 +77,14 @@ func TestBuffer(t *testing.T) {
 	})
 	t.Run("write and read", func(t *testing.T) {
 		t.Run("empty return EOF", func(t *testing.T) {
-			b := New[int](5)
+			b := NewBuffer[int](5)
 			buf := make([]int, 6)
 			n, err := b.Read(buf)
 			require.Equal(t, io.EOF, err)
 			require.Equal(t, 0, n)
 		})
 		t.Run("full", func(t *testing.T) {
-			b := New[int](5)
+			b := NewBuffer[int](5)
 			n, err := b.Write([]int{1, 2, 3, 4, 5})
 			require.NoError(t, err)
 			require.Equal(t, 5, n)
@@ -96,7 +96,7 @@ func TestBuffer(t *testing.T) {
 			require.Equal(t, []int{1, 2, 3, 4, 5}, buf[:n])
 		})
 		t.Run("full via parts", func(t *testing.T) {
-			b := New[int](5)
+			b := NewBuffer[int](5)
 			n, err := b.Write([]int{1, 2, 3})
 			require.NoError(t, err)
 			require.Equal(t, 3, n)
@@ -115,7 +115,7 @@ func TestBuffer(t *testing.T) {
 			require.Equal(t, []int{1, 2, 3, 4, 5}, buf[:5])
 		})
 		t.Run("too large", func(t *testing.T) {
-			b := New[int](5)
+			b := NewBuffer[int](5)
 			n, err := b.Write([]int{1, 2, 3, 4, 5, 6, 7})
 			require.NoError(t, err)
 			require.Equal(t, 7, n)
@@ -127,7 +127,7 @@ func TestBuffer(t *testing.T) {
 			require.Equal(t, []int{3, 4, 5, 6, 7}, buf[:n])
 		})
 		t.Run("too large with existing", func(t *testing.T) {
-			b := New[int](5)
+			b := NewBuffer[int](5)
 			n, err := b.Write([]int{1, 2, 3})
 			require.NoError(t, err)
 			require.Equal(t, 3, n)
@@ -142,7 +142,7 @@ func TestBuffer(t *testing.T) {
 			require.Equal(t, []int{3, 4, 5, 6, 7}, buf[:n])
 		})
 		t.Run("interleaved", func(t *testing.T) {
-			b := New[int](6)
+			b := NewBuffer[int](6)
 			buf := make([]int, 6)
 
 			n, err := b.Write([]int{1, 2, 3, 4})
@@ -162,7 +162,7 @@ func TestBuffer(t *testing.T) {
 			require.Equal(t, []int{4, 5, 6, 10, 11, 12}, buf[:n])
 		})
 		t.Run("interleaved drop", func(t *testing.T) {
-			b := New[int](6)
+			b := NewBuffer[int](6)
 			buf := make([]int, 6)
 
 			n, err := b.Write([]int{1, 2, 3, 4})

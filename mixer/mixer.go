@@ -24,7 +24,7 @@ import (
 	"github.com/frostbyte73/core"
 	msdk "github.com/livekit/media-sdk"
 
-	"github.com/livekit/media-sdk/ringbuf"
+	"github.com/livekit/media-sdk/ring"
 )
 
 const (
@@ -55,7 +55,7 @@ type Input struct {
 	m          *Mixer
 	sampleRate int
 	mu         sync.Mutex
-	buf        *ringbuf.Buffer[int16]
+	buf        *ring.Buffer[int16]
 	buffering  bool
 }
 
@@ -237,7 +237,7 @@ func (m *Mixer) NewInput() *Input {
 	inp := &Input{
 		m:          m,
 		sampleRate: m.sampleRate,
-		buf:        ringbuf.New[int16](len(m.mixBuf) * m.inputBufferFrames),
+		buf:        ring.NewBuffer[int16](len(m.mixBuf) * m.inputBufferFrames),
 		buffering:  true, // buffer some data initially
 	}
 	m.inputs = append(m.inputs, inp)

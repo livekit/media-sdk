@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ringbuf
+package ring
 
 import (
 	"io"
 )
 
 // New creates a new ring buffer with s specified size.
-func New[T any](sz int) *Buffer[T] {
+func NewBuffer[T any](sz int) *Buffer[T] {
 	return &Buffer[T]{
 		buf: make([]T, sz),
 	}
