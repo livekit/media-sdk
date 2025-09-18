@@ -24,7 +24,7 @@ import (
 	"github.com/frostbyte73/core"
 	msdk "github.com/livekit/media-sdk"
 
-	"github.com/livekit/media-sdk/internal/ringbuf"
+	"github.com/livekit/media-sdk/ringbuf"
 )
 
 const (
