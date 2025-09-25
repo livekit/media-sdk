@@ -256,24 +256,25 @@ func (b *Buffer) push(pkt *rtp.Packet) {
 	}
 }
 
-// popReady pushes all ready samples to the out channel
+// popReady pushes all ready samples
 func (b *Buffer) popReady() {
 	expiry := time.Now().Add(-b.latency)
 
 	b.dropIncompleteExpired(expiry)
 
 	loss := false
-	for b.head != nil &&
-		b.head.isComplete() {
-
-		if b.head.packet.SequenceNumber == b.prevSN+1 || b.head.discont || !b.initialized {
-			// normal
-		} else if b.head.received.Before(expiry) {
-			// max latency reached
-			loss = true
-			b.stats.PacketsLost += uint64(b.head.packet.SequenceNumber - b.prevSN - 1)
-		} else {
+	for b.head != nil && b.head.isComplete() {
+		if b.head.received.After(expiry) {
+			// has not waited long enough
 			break
+		}
+
+		// max latency reached, sample can be pushed out
+		if !b.head.discont && b.initialized {
+			lost := uint64(b.head.packet.SequenceNumber - b.prevSN - 1)
+			b.stats.PacketsLost += lost
+
+			loss = loss || lost > 0
 		}
 
 		if sample := b.popSample(); len(sample) > 0 {
