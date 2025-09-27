@@ -234,22 +234,22 @@ func (s *MediaStreamOut[T]) WriteSample(sample T) error {
 	return s.s.WritePayload([]byte(sample), false)
 }
 
-func NewMediaStreamIn[T BytesFrame](w media.Writer[T]) *MediaStreamIn[T] {
-	return &MediaStreamIn[T]{Writer: w}
+func NewMediaStreamIn[T BytesFrame](w media.WriteCloser[T]) *MediaStreamIn[T] {
+	return &MediaStreamIn[T]{WriteCloser: w}
 }
 
 type MediaStreamIn[T BytesFrame] struct {
-	Writer media.Writer[T]
+	WriteCloser media.WriteCloser[T]
 }
 
 func (s *MediaStreamIn[T]) String() string {
-	return fmt.Sprintf("RTP(%d) -> %s", s.Writer.SampleRate(), s.Writer)
+	return fmt.Sprintf("RTP(%d) -> %s", s.WriteCloser.SampleRate(), s.WriteCloser)
 }
 
 func (s *MediaStreamIn[T]) HandleRTP(_ *rtp.Header, payload []byte) error {
-	return s.Writer.WriteSample(T(payload))
+	return s.WriteCloser.WriteSample(T(payload))
 }
 
 func (s *MediaStreamIn[T]) Close() error {
-	return nil
+	return s.WriteCloser.Close()
 }
