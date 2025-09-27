@@ -249,3 +249,7 @@ func (s *MediaStreamIn[T]) String() string {
 func (s *MediaStreamIn[T]) HandleRTP(_ *rtp.Header, payload []byte) error {
 	return s.Writer.WriteSample(T(payload))
 }
+
+func (s *MediaStreamIn[T]) Close() error {
+	return nil
+}
