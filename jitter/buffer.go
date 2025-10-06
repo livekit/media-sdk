@@ -131,6 +131,10 @@ func (b *Buffer) Push(pkt *rtp.Packet) {
 	b.PushAt(pkt, mono.Now())
 }
 
+func (b *Buffer) PushExtPacket(extPkt ExtPacket) {
+	b.PushAt(extPkt.Packet, extPkt.ReceivedAt)
+}
+
 func (b *Buffer) PushAt(pkt *rtp.Packet, receivedAt time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
