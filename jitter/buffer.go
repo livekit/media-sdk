@@ -135,6 +135,12 @@ func (b *Buffer) PushExtPacket(extPkt ExtPacket) {
 	b.PushAt(extPkt.Packet, extPkt.ReceivedAt)
 }
 
+func (b *Buffer) PushExtPacketBatch(extPktBatch []ExtPacket) {
+	for _, extPkt := range extPktBatch {
+		b.PushAt(extPkt.Packet, extPkt.ReceivedAt)
+	}
+}
+
 func (b *Buffer) PushAt(pkt *rtp.Packet, receivedAt time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
