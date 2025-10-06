@@ -23,7 +23,6 @@ import (
 	"github.com/pion/rtp"
 
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/protocol/utils/mono"
 )
 
 type ExtPacket struct {
@@ -128,7 +127,7 @@ func (b *Buffer) UpdateLatency(latency time.Duration) {
 }
 
 func (b *Buffer) Push(pkt *rtp.Packet) {
-	b.PushAt(pkt, mono.Now())
+	b.PushAt(pkt, time.Now())
 }
 
 func (b *Buffer) PushExtPacket(extPkt ExtPacket) {
