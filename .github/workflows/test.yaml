@@ -51,6 +51,7 @@ jobs:
         uses: dominikh/staticcheck-action@master
         with:
           install-go: false
+          use-cache: false
 
       - name: Replace mutexes
         run: |
