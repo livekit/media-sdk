@@ -232,6 +232,80 @@ func TestDroppedPackets(t *testing.T) {
 	})
 }
 
+func TestLargeSequenceJump(t *testing.T) {
+	out := make(chan []ExtPacket, 100)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := newTestStream()
+
+	// push some normal packets
+	for i := 0; i < 10; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+
+	// simulate large sequence jump (should trigger reset)
+	s.largeSeqJump()
+	
+	// buffer should reset and accept new packets
+	for i := 0; i < 10; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+
+	stats := b.Stats()
+	require.Equal(t, uint64(20), stats.PacketsPushed)
+	require.Equal(t, uint64(20), stats.PacketsPopped)
+	require.Equal(t, uint64(20), stats.SamplesPopped)
+}
+
+func TestLargeTimestampJump(t *testing.T) {
+	out := make(chan []ExtPacket, 100)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := &timestampStream{
+		seq: uint16(rand.Uint32()),
+		ts:  uint32(rand.Uint32()),
+	}
+
+	// push some normal packets
+	for i := 0; i < 10; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+
+	// simulate large timestamp jump (should trigger reset)
+	s.largeTimestampJump()
+	
+	// buffer should reset and accept new packets
+	for i := 0; i < 10; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+
+	stats := b.Stats()
+	require.Equal(t, uint64(20), stats.PacketsPushed)
+	require.Equal(t, uint64(20), stats.PacketsPopped)
+	require.Equal(t, uint64(20), stats.SamplesPopped)
+}
+
+func TestSequenceWraparound(t *testing.T) {
+	out := make(chan []ExtPacket, 100)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := &stream{
+		seq: math.MaxUint16 - 5, // start near wrap point
+	}
+
+	// push packets across wraparound boundary
+	for i := 0; i < 15; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+
+	stats := b.Stats()
+	require.Equal(t, uint64(15), stats.PacketsPushed)
+	require.Equal(t, uint64(15), stats.PacketsPopped)
+	require.Equal(t, uint64(0), stats.PacketsLost)
+}
+
 func checkSample(t *testing.T, out chan []ExtPacket, expected int) {
 	select {
 	case sample := <-out:
@@ -283,6 +357,36 @@ func (s *stream) gen(head, tail bool) *rtp.Packet {
 
 func (s *stream) discont() {
 	s.seq += math.MaxUint16 / 2
+}
+
+func (s *stream) largeSeqJump() {
+	s.seq += 2000 // more than MAX_SEQUENCE_JUMP (1000)
+}
+
+type timestampStream struct {
+	seq uint16
+	ts  uint32
+}
+
+func (s *timestampStream) gen(head, tail bool) *rtp.Packet {
+	p := &rtp.Packet{
+		Header: rtp.Header{
+			Marker:         tail,
+			SequenceNumber: s.seq,
+			Timestamp:      s.ts,
+		},
+		Payload: make([]byte, defaultPacketSize),
+	}
+	if head {
+		copy(p.Payload, headerBytes)
+	}
+	s.seq++
+	s.ts += 160 // typical increment for 20ms at 8kHz
+	return p
+}
+
+func (s *timestampStream) largeTimestampJump() {
+	s.ts += 8000 * 60 // 60 seconds worth of samples (more than MAX_TIMESTAMP_JUMP)
 }
 
 const defaultPacketSize = 200

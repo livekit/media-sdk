@@ -43,6 +43,7 @@ type Buffer struct {
 
 	initialized bool
 	prevSN      uint16
+	prevTS      uint32
 	head        *packet
 	tail        *packet
 
@@ -187,6 +188,75 @@ func (b *Buffer) Close() {
 	b.closed.Break()
 }
 
+func (b *Buffer) isLargeTimestampJump(current, prev uint32) bool {
+	const MAX_TIMESTAMP_JUMP = 8000 * 30 // 30 seconds at 8kHz
+
+	if !b.initialized {
+		return false
+	}
+
+	cur := int64(current)
+	prv := int64(prev)
+
+	forwardDiff := cur - prv
+	if forwardDiff < 0 {
+		forwardDiff += (1 << 32) // handle 32-bit wrap-around
+	}
+
+	backwardDiff := prv - cur
+	if backwardDiff < 0 {
+		backwardDiff += (1 << 32) // handle 32-bit wrap-around
+	}
+
+	return min(backwardDiff, forwardDiff) > MAX_TIMESTAMP_JUMP
+}
+
+func (b *Buffer) isLargeSequenceJump(current, prev uint16) bool {
+	const MAX_SEQUENCE_JUMP = 1000
+
+	if !b.initialized {
+		return false
+	}
+
+	cur := int32(current)
+	prv := int32(prev)
+
+	forwardDiff := cur - prv
+	if forwardDiff < 0 {
+		forwardDiff += 65536 // handle wrap-around
+	}
+
+	backwardDiff := prv - cur
+	if backwardDiff < 0 {
+		backwardDiff += 65536 // handle wrap-around
+	}
+
+	return min(backwardDiff, forwardDiff) > MAX_SEQUENCE_JUMP
+}
+
+func (b *Buffer) reset() {
+	b.logger.Infow("resetting jitter buffer due to RTP discontinuity")
+
+	for b.head != nil {
+		next := b.head.next
+		b.free(b.head)
+		b.head = next
+	}
+	b.tail = nil
+
+	b.initialized = false
+	b.prevSN = 0
+	b.prevTS = 0
+
+	if !b.timer.Stop() {
+		select {
+		case <-b.timer.C:
+		default:
+		}
+	}
+	b.timer.Reset(b.latency)
+}
+
 // push adds a packet to the buffer
 func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	b.stats.PacketsPushed++
@@ -197,8 +267,19 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		}
 	}
 
+	if b.isLargeTimestampJump(pkt.Timestamp, b.prevTS) ||
+		b.isLargeSequenceJump(pkt.SequenceNumber, b.prevSN) {
+		b.logger.Infow("large RTP discontinuity detected",
+			"current_ts", pkt.Timestamp,
+			"prev_ts", b.prevTS,
+			"current_sn", pkt.SequenceNumber,
+			"prev_sn", b.prevSN,
+		)
+		b.reset()
+	}
+
 	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
-		// packet expired
+		// packet expired (not after discontinuity reset)
 		if !pkt.Padding {
 			b.stats.PacketsDropped++
 			if b.onPacketLoss != nil {
@@ -354,6 +435,7 @@ func (b *Buffer) popSample() []ExtPacket {
 func (b *Buffer) popHead() *packet {
 	c := b.head
 	b.prevSN = c.extPacket.SequenceNumber
+	b.prevTS = c.extPacket.Timestamp
 	b.head = c.next
 	if b.head == nil {
 		b.tail = nil
