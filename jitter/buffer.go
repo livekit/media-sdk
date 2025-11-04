@@ -189,7 +189,7 @@ func (b *Buffer) Close() {
 }
 
 func (b *Buffer) isLargeTimestampJump(current, prev uint32) bool {
-	const MAX_TIMESTAMP_JUMP = 8000 * 30 // 30 seconds at 8kHz
+	const MAX_TIMESTAMP_JUMP = 48000 * 30 // 30 seconds at 48kHz
 
 	if !b.initialized {
 		return false

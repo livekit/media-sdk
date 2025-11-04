@@ -245,7 +245,7 @@ func TestLargeSequenceJump(t *testing.T) {
 
 	// simulate large sequence jump (should trigger reset)
 	s.largeSeqJump()
-	
+
 	// buffer should reset and accept new packets
 	for i := 0; i < 10; i++ {
 		b.Push(s.gen(true, true))
@@ -274,7 +274,7 @@ func TestLargeTimestampJump(t *testing.T) {
 
 	// simulate large timestamp jump (should trigger reset)
 	s.largeTimestampJump()
-	
+
 	// buffer should reset and accept new packets
 	for i := 0; i < 10; i++ {
 		b.Push(s.gen(true, true))
@@ -381,7 +381,7 @@ func (s *timestampStream) gen(head, tail bool) *rtp.Packet {
 		copy(p.Payload, headerBytes)
 	}
 	s.seq++
-	s.ts += 160 // typical increment for 20ms at 8kHz
+	s.ts += 960 // typical increment for 20ms at 48kHz
 	return p
 }
 
