@@ -234,7 +234,7 @@ func TestDroppedPackets(t *testing.T) {
 
 func TestLargeSequenceJump(t *testing.T) {
 	out := make(chan []ExtPacket, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out), WithMaxSequenceJump(1000))
 	s := newTestStream()
 
 	// push some normal packets
@@ -260,7 +260,7 @@ func TestLargeSequenceJump(t *testing.T) {
 
 func TestLargeTimestampJump(t *testing.T) {
 	out := make(chan []ExtPacket, 100)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out), WithMaxTimestampJump(48000*30))
 	s := &timestampStream{
 		seq: uint16(rand.Uint32()),
 		ts:  uint32(rand.Uint32()),

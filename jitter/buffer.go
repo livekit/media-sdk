@@ -15,6 +15,7 @@
 package jitter
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -52,6 +53,9 @@ type Buffer struct {
 
 	pool *packet
 	size int
+
+	maxSequenceJump  *uint16
+	maxTimestampJump *uint32
 }
 
 type Option func(*Buffer)
@@ -110,6 +114,18 @@ func WithLogger(logger logger.Logger) Option {
 func WithPacketLossHandler(handler func()) Option {
 	return func(b *Buffer) {
 		b.onPacketLoss = handler
+	}
+}
+
+func WithMaxSequenceJump(max uint16) Option {
+	return func(b *Buffer) {
+		b.maxSequenceJump = &max
+	}
+}
+
+func WithMaxTimestampJump(max uint32) Option {
+	return func(b *Buffer) {
+		b.maxTimestampJump = &max
 	}
 }
 
@@ -189,60 +205,71 @@ func (b *Buffer) Close() {
 }
 
 func (b *Buffer) isLargeTimestampJump(current, prev uint32) bool {
-	const MAX_TIMESTAMP_JUMP = 48000 * 30 // 30 seconds at 48kHz
-
-	if !b.initialized {
+	if b.maxTimestampJump == nil || !b.initialized {
 		return false
 	}
+
+	maxJump := uint32(*b.maxTimestampJump)
 
 	cur := int64(current)
 	prv := int64(prev)
 
 	forwardDiff := cur - prv
 	if forwardDiff < 0 {
-		forwardDiff += (1 << 32) // handle 32-bit wrap-around
+		forwardDiff += int64(math.MaxUint32) + 1
 	}
 
 	backwardDiff := prv - cur
 	if backwardDiff < 0 {
-		backwardDiff += (1 << 32) // handle 32-bit wrap-around
+		backwardDiff += int64(math.MaxUint32) + 1
 	}
 
-	return min(backwardDiff, forwardDiff) > MAX_TIMESTAMP_JUMP
+	return min(backwardDiff, forwardDiff) > int64(maxJump)
 }
 
 func (b *Buffer) isLargeSequenceJump(current, prev uint16) bool {
-	const MAX_SEQUENCE_JUMP = 1000
-
-	if !b.initialized {
+	if b.maxSequenceJump == nil || !b.initialized {
 		return false
 	}
+
+	maxJump := int32(*b.maxSequenceJump)
 
 	cur := int32(current)
 	prv := int32(prev)
 
 	forwardDiff := cur - prv
 	if forwardDiff < 0 {
-		forwardDiff += 65536 // handle wrap-around
+		forwardDiff += int32(math.MaxUint16) + 1
 	}
 
 	backwardDiff := prv - cur
 	if backwardDiff < 0 {
-		backwardDiff += 65536 // handle wrap-around
+		backwardDiff += int32(math.MaxUint16) + 1
 	}
 
-	return min(backwardDiff, forwardDiff) > MAX_SEQUENCE_JUMP
+	return min(backwardDiff, forwardDiff) > maxJump
 }
 
 func (b *Buffer) reset() {
 	b.logger.Infow("resetting jitter buffer due to RTP discontinuity")
 
+	dropped := 0
 	for b.head != nil {
 		next := b.head.next
+		if !b.head.extPacket.Padding {
+			dropped++
+		}
 		b.free(b.head)
 		b.head = next
 	}
 	b.tail = nil
+
+	if dropped > 0 {
+		b.stats.PacketsDropped += uint64(dropped)
+		if b.onPacketLoss != nil {
+			b.onPacketLoss()
+		}
+	}
 
 	b.initialized = false
 	b.prevSN = 0
