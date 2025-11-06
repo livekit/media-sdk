@@ -110,9 +110,7 @@ func MasterKeyIndicator(mki []byte) ContextOption {
 	return srtp.MasterKeyIndicator(mki)
 }
 
-const (
-	SessionExpiredError error = errors.New("SRTP profile key lifetime expired")
-)
+type SessionExpiredError error
 
 // Lifetime, in packets encrypted, before session keys are invalidated
 // Once limit is reached, WriteRTP will return SessionExpiredError
@@ -149,7 +147,13 @@ func (s *session) OpenWriteStream() (rtp.WriteStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return writeStream{w: w, lifetimeSet: s.lifetime > 0, lifetimeRemaining: s.lifetime}, nil
+	newLifetime := uint64(s.lifetime)
+	return writeStream{
+		w:                 w,
+		lifetimeSet:       s.lifetime > 0,
+		lifetimeRemaining: &newLifetime,
+		mu:                &sync.RWMutex{},
+	}, nil
 }
 
 func (s *session) AcceptStream() (rtp.ReadStream, uint32, error) {
@@ -168,8 +172,8 @@ type writeStream struct {
 	w           *srtp.WriteStreamSRTP
 	lifetimeSet bool
 
-	mu                sync.RWMutex
-	lifetimeRemaining uint64
+	mu                *sync.RWMutex
+	lifetimeRemaining *uint64
 }
 
 func (w writeStream) String() string {
@@ -179,13 +183,13 @@ func (w writeStream) String() string {
 func (w writeStream) WriteRTP(h *prtp.Header, payload []byte) (int, error) {
 	if w.lifetimeSet {
 		w.mu.Lock()
-		remaining := w.lifetimeRemaining
-		if w.lifetimeRemaining > 0 {
-			w.lifetimeRemaining--
+		remaining := *w.lifetimeRemaining
+		if remaining > 0 {
+			*w.lifetimeRemaining = remaining - 1
 		}
 		w.mu.Unlock()
 		if remaining == 0 {
-			return 0, SessionExpiredError
+			return 0, SessionExpiredError(errors.New("SRTP profile key lifetime expired"))
 		}
 	}
 	return w.w.WriteRTP(h, payload)
