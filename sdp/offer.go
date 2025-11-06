@@ -16,6 +16,7 @@ package sdp
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -410,32 +411,36 @@ func parseLifetime(s string) (uint64, error) {
 	return val, nil
 }
 
-func parseMKI(s string) (MKI, error) {
+func parseMKI(s string) ([]byte, error) {
 	// See RFC4568, section 6.1
 	s = strings.TrimSpace(s)
 
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {
-		return MKI{}, fmt.Errorf("MKI must be in format 'value:length', got %q", s)
+		return nil, fmt.Errorf("MKI must be in format 'value:length', got %q", s)
 	}
 
 	value, err := strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
-		return MKI{}, fmt.Errorf("invalid MKI value %q: %v", parts[0], err)
+		return nil, fmt.Errorf("invalid MKI value %q: %v", parts[0], err)
 	}
 
 	length, err := strconv.ParseUint(parts[1], 10, 8)
 	if err != nil {
-		return MKI{}, fmt.Errorf("invalid MKI length %q: %v", parts[1], err)
+		return nil, fmt.Errorf("invalid MKI length %q: %v", parts[1], err)
 	}
 	if length == 0 || length > 128 {
-		return MKI{}, fmt.Errorf("MKI length must be between 1 and 128, got %d", length)
+		return nil, fmt.Errorf("MKI length must be between 1 and 128, got %d", length)
+	}
+	if value >= 2^(length*8) {
+		return nil, fmt.Errorf("value %d is too large for %d bytes", value, length)
 	}
 
-	return MKI{
-		Value:  value,
-		Length: uint8(length),
-	}, nil
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, value) // Pion expects big-endian
+	mki := buf[8-length:]
+
+	return mki, nil
 }
 
 func parseSRTPProfile(val string) (*srtp.Profile, error) {
@@ -476,7 +481,7 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 		}
 	}
 
-	masterKeyIdentifier := srtp.MKI{}
+	var masterKeyIdentifier []byte
 	if len(parts) > 2 && parts[2] != "" {
 		masterKeyIdentifier, err = parseMKI(parts[2])
 		if err != nil {
@@ -619,6 +624,20 @@ func SelectCrypto(offer, answer []srtp.Profile, swap bool) (*srtp.Config, *srtp.
 				c.Keys.LocalMasterKey, c.Keys.RemoteMasterKey = c.Keys.RemoteMasterKey, c.Keys.LocalMasterKey
 				c.Keys.LocalMasterSalt, c.Keys.RemoteMasterSalt = c.Keys.RemoteMasterSalt, c.Keys.LocalMasterSalt
 			}
+
+			// Add MKI to configuration
+			localMKI := off.MKI
+			remoteMKI := ans.MKI
+			if swap {
+				localMKI, remoteMKI = remoteMKI, localMKI
+			}
+			if len(localMKI) > 0 {
+				c.LocalOptions = append(c.LocalOptions, srtp.MasterKeyIndicator(localMKI))
+			}
+			if len(remoteMKI) > 0 {
+				c.RemoteOptions = append(c.RemoteOptions, srtp.MasterKeyIndicator(remoteMKI))
+			}
+
 			prof := &off
 			if swap {
 				prof = &ans
