@@ -384,6 +384,7 @@ func ParseAnswer(data []byte) (*Answer, error) {
 	return (*Answer)(d), nil
 }
 
+// Returns valid lifetime, counted in packets encrypted using the associated key.
 func parseLifetime(s string) (uint64, error) {
 	// See RFC4568, section 6.1
 	s = strings.TrimSpace(s)
@@ -411,6 +412,7 @@ func parseLifetime(s string) (uint64, error) {
 	return val, nil
 }
 
+// Returns a slice of <= 8 bytes with the MKI value encoded in big-endian.
 func parseMKI(s string) ([]byte, error) {
 	// See RFC4568, section 6.1
 	s = strings.TrimSpace(s)
@@ -437,7 +439,7 @@ func parseMKI(s string) ([]byte, error) {
 	}
 
 	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, value) // Pion expects big-endian
+	binary.BigEndian.PutUint64(buf, value)
 	mki := buf[8-length:]
 
 	return mki, nil
@@ -481,9 +483,9 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 		}
 	}
 
-	var masterKeyIdentifier []byte
+	var mki []byte
 	if len(parts) > 2 && parts[2] != "" {
-		masterKeyIdentifier, err = parseMKI(parts[2])
+		mki, err = parseMKI(parts[2])
 		if err != nil {
 			return nil, fmt.Errorf("invalid MKI parameter %q: %v", parts[2], err)
 		}
@@ -502,7 +504,7 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 		Profile:  prof,
 		Key:      keys,
 		Salt:     salt,
-		MKI:      masterKeyIdentifier,
+		MKI:      mki,
 		Lifetime: lifetime,
 	}, nil
 }
