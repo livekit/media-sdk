@@ -410,11 +410,6 @@ func parseLifetime(s string) (uint64, error) {
 	return val, nil
 }
 
-type MKI struct { // Master Key Identifier
-	Value  uint64
-	Length uint8 // Length of the MKI field in bytes (1-128)
-}
-
 func parseMKI(s string) (MKI, error) {
 	// See RFC4568, section 6.1
 	s = strings.TrimSpace(s)
@@ -473,15 +468,17 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 	}
 
 	// Parse optional lifetime parameter (if present)
+	lifetime := uint64(0)
 	if len(parts) > 1 && parts[1] != "" {
-		_, err := parseLifetime(parts[1])
+		lifetime, err = parseLifetime(parts[1])
 		if err != nil {
 			return nil, fmt.Errorf("invalid lifetime parameter %q: %v", parts[1], err)
 		}
 	}
 
+	masterKeyIdentifier := srtp.MKI{}
 	if len(parts) > 2 && parts[2] != "" {
-		_, err := parseMKI(parts[2])
+		masterKeyIdentifier, err = parseMKI(parts[2])
 		if err != nil {
 			return nil, fmt.Errorf("invalid MKI parameter %q: %v", parts[2], err)
 		}
@@ -496,10 +493,12 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 		keys, salt = keys[:keyLen], keys[keyLen:]
 	}
 	return &srtp.Profile{
-		Index:   ind,
-		Profile: prof,
-		Key:     keys,
-		Salt:    salt,
+		Index:    ind,
+		Profile:  prof,
+		Key:      keys,
+		Salt:     salt,
+		MKI:      masterKeyIdentifier,
+		Lifetime: lifetime,
 	}, nil
 }
 

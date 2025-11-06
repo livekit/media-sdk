@@ -88,11 +88,18 @@ func (p ProtectionProfile) Parse() (srtp.ProtectionProfile, error) {
 	}
 }
 
+type MKI struct { // Master Key Identifier
+	Value  uint64
+	Length uint8 // Length of the MKI field in bytes (1-128)
+}
+
 type Profile struct {
-	Index   int
-	Profile ProtectionProfile
-	Key     []byte
-	Salt    []byte
+	Index    int
+	Profile  ProtectionProfile
+	Key      []byte
+	Salt     []byte
+	MKI      MKI
+	Lifetime uint64
 }
 
 type Config = srtp.Config
