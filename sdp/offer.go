@@ -383,6 +383,66 @@ func ParseAnswer(data []byte) (*Answer, error) {
 	return (*Answer)(d), nil
 }
 
+func parseLifetime(s string) (uint64, error) {
+	// See RFC4568, section 6.1
+	s = strings.TrimSpace(s)
+
+	// Possible format 2^N (and only that)
+	if strings.HasPrefix(s, "2^") {
+		exp, err := strconv.ParseUint(s[2:], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid exponent in 2^%s: %v", s[2:], err)
+		}
+		if exp > 63 {
+			return 0, fmt.Errorf("exponent too large: 2^%d", exp)
+		}
+		return 1 << exp, nil
+	}
+
+	// Otherwise, parse as decimal integer
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid lifetime value %q: %v", s, err)
+	}
+	if val == 0 {
+		return 0, fmt.Errorf("lifetime must be positive")
+	}
+	return val, nil
+}
+
+type MKI struct { // Master Key Identifier
+	Value  uint64
+	Length uint8 // Length of the MKI field in bytes (1-128)
+}
+
+func parseMKI(s string) (MKI, error) {
+	// See RFC4568, section 6.1
+	s = strings.TrimSpace(s)
+
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return MKI{}, fmt.Errorf("MKI must be in format 'value:length', got %q", s)
+	}
+
+	value, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return MKI{}, fmt.Errorf("invalid MKI value %q: %v", parts[0], err)
+	}
+
+	length, err := strconv.ParseUint(parts[1], 10, 8)
+	if err != nil {
+		return MKI{}, fmt.Errorf("invalid MKI length %q: %v", parts[1], err)
+	}
+	if length == 0 || length > 128 {
+		return MKI{}, fmt.Errorf("MKI length must be between 1 and 128, got %d", length)
+	}
+
+	return MKI{
+		Value:  value,
+		Length: uint8(length),
+	}, nil
+}
+
 func parseSRTPProfile(val string) (*srtp.Profile, error) {
 	val = strings.TrimSpace(val)
 	sub := strings.SplitN(val, " ", 3)
@@ -399,13 +459,34 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 	if !ok {
 		return nil, nil // ignore
 	}
-	keys, err := base64.RawStdEncoding.DecodeString(skey)
+
+	// Split by '|' per RFC 4568 6.1
+	parts := strings.Split(skey, "|")
+	keyMaterial := parts[0] // First part is always the base64-encoded key+salt
+
+	keys, err := base64.RawStdEncoding.DecodeString(keyMaterial)
 	if err != nil {
 		// Fallback to padded encoding if raw fails
-		if keys, err = base64.StdEncoding.DecodeString(skey); err != nil {
-			return nil, fmt.Errorf("cannot parse crypto key %q: %v", skey, err)
+		if keys, err = base64.StdEncoding.DecodeString(keyMaterial); err != nil {
+			return nil, fmt.Errorf("cannot parse crypto key %q: %v", keyMaterial, err)
 		}
 	}
+
+	// Parse optional lifetime parameter (if present)
+	if len(parts) > 1 && parts[1] != "" {
+		_, err := parseLifetime(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid lifetime parameter %q: %v", parts[1], err)
+		}
+	}
+
+	if len(parts) > 2 && parts[2] != "" {
+		_, err := parseMKI(parts[2])
+		if err != nil {
+			return nil, fmt.Errorf("invalid MKI parameter %q: %v", parts[2], err)
+		}
+	}
+
 	var salt []byte
 	if sp, err := prof.Parse(); err == nil {
 		keyLen, err := sp.KeyLen()
