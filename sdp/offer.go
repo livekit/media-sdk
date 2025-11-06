@@ -434,7 +434,8 @@ func parseMKI(s string) ([]byte, error) {
 	if length == 0 || length > 8 {
 		return nil, fmt.Errorf("supported MKI length between 1 and 8 bytes, got %d", length)
 	}
-	if value >= 2^(length*8) {
+	maxValue := uint64(1) << (length * 8)
+	if value >= maxValue {
 		return nil, fmt.Errorf("value %d is too large for %d bytes", value, length)
 	}
 

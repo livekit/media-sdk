@@ -509,6 +509,45 @@ a=rtcp-fb:* ccm tmmbr
 	})
 }
 
+// TestParseOfferLifetimeAndMKI verifies that lifetime and MKI are correctly parsed from an SDP offer
+func TestParseOfferLifetimeAndMKI(t *testing.T) {
+	// Create an SDP offer with lifetime and MKI in the crypto attribute
+	// Format: crypto:tag crypto-suite inline:base64-key-salt|lifetime|value:length
+	// lifetime: 2^48 (281474976710656)
+	// MKI: 66051:4 which decodes to [0x00, 0x01, 0x02, 0x03] in big-endian (66051 = 0x00010203)
+	const sdpData = `v=0 
+o=Test 1 1 IN IP4 127.0.0.1 
+s=Stream1 
+t=0 0 
+m=audio 5000 RTP/SAVP 0 101 
+c=IN IP4 127.0.0.1 
+a=rtpmap:0 PCMU/8000 
+a=rtpmap:101 telephone-event/8000 
+a=sendrecv 
+a=ptime:20 
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1|2^48|66051:4 
+`
+
+	offer, err := ParseOffer([]byte(sdpData))
+	require.NoError(t, err)
+	require.NotEmpty(t, offer.CryptoProfiles)
+
+	// Verify the first crypto profile has the correct lifetime and MKI
+	profile := offer.CryptoProfiles[0]
+	require.Equal(t, 1, profile.Index)
+	require.Equal(t, srtp.ProtectionProfile("AES_CM_128_HMAC_SHA1_80"), profile.Profile)
+
+	// Verify lifetime: 2^48 = 281474976710656
+	expectedLifetime := uint64(1 << 48)
+	require.Equal(t, expectedLifetime, profile.Lifetime, "Lifetime should be 2^48")
+
+	// Verify MKI: 66051:4 should decode to [0x00, 0x01, 0x02, 0x03] in big-endian
+	// 66051 = 0x00010203 in hex
+	expectedMKI := []byte{0x00, 0x01, 0x02, 0x03}
+	require.Equal(t, expectedMKI, profile.MKI, "MKI should be [0x00, 0x01, 0x02, 0x03]")
+	require.Equal(t, 4, len(profile.MKI), "MKI length should be 4 bytes")
+}
+
 // TestSelectCryptoSuiteTag ensures that when selecting a crypto suite from an offer/answer pair,
 // the answer uses the same crypto suite tag as the offer, per RFC 4568 section 5.1.2 and 5.1.3.
 func TestSelectCryptoSuiteTag(t *testing.T) {
