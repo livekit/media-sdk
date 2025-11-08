@@ -318,6 +318,8 @@ func (b *Buffer) popReady() {
 
 	if b.head != nil {
 		b.timer.Reset(b.timeWrapper.Until(b.head.extPacket.ReceivedAt.Add(b.latency)))
+	} else {
+		b.timer.Forget()
 	}
 }
 
@@ -386,6 +388,7 @@ type TimerWrapper interface {
 	C() <-chan time.Time
 	Reset(d time.Duration) bool
 	Stop() bool
+	Forget() // JANKY HACK! NEVER COMMIT THIS!
 }
 
 type timerWrapper struct {
@@ -402,6 +405,9 @@ func (t *timerWrapper) Reset(d time.Duration) bool {
 
 func (t *timerWrapper) Stop() bool {
 	return t.timer.Stop()
+}
+
+func (t *timerWrapper) Forget() {
 }
 
 // TimeWrapper provides time and timer functionality
