@@ -46,8 +46,9 @@ type Buffer struct {
 	head        *packet
 	tail        *packet
 
-	stats *BufferStats
-	timer *time.Timer
+	stats       *BufferStats
+	timeWrapper TimeWrapper
+	timer       *time.Timer
 
 	pool *packet
 	size int
@@ -77,12 +78,16 @@ func NewBuffer(
 		latency:      latency,
 		logger:       logger.LogRLogger(logr.Discard()),
 		stats:        &BufferStats{},
-		timer:        time.NewTimer(latency),
 		onPacket:     fnc,
 	}
 	for _, opt := range opts {
 		opt(b)
 	}
+
+	if b.timeWrapper == nil { // Make sure b.timeWrapper is set
+		b.timeWrapper = &timePackageWrapper{}
+	}
+	b.timer = b.timeWrapper.NewTimer(latency)
 
 	go func() {
 		for {
@@ -112,6 +117,12 @@ func WithPacketLossHandler(handler func()) Option {
 	}
 }
 
+func WithTimeWrapper(wrapper TimeWrapper) Option {
+	return func(b *Buffer) {
+		b.timeWrapper = wrapper
+	}
+}
+
 func (b *Buffer) WithLogger(logger logger.Logger) *Buffer {
 	b.logger = logger
 	return b
@@ -123,7 +134,7 @@ func (b *Buffer) UpdateLatency(latency time.Duration) {
 
 	b.latency = latency
 	if b.head != nil {
-		b.timer.Reset(time.Until(b.head.extPacket.ReceivedAt.Add(latency)))
+		b.timer.Reset(b.timeWrapper.Until(b.head.extPacket.ReceivedAt.Add(latency)))
 	}
 }
 
@@ -278,7 +289,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 // popReady pushes all ready samples to the out channel
 func (b *Buffer) popReady() {
-	expiry := time.Now().Add(-b.latency)
+	expiry := b.timeWrapper.Now().Add(-b.latency)
 
 	b.dropIncompleteExpired(expiry)
 
@@ -306,7 +317,7 @@ func (b *Buffer) popReady() {
 	}
 
 	if b.head != nil {
-		b.timer.Reset(time.Until(b.head.extPacket.ReceivedAt.Add(b.latency)))
+		b.timer.Reset(b.timeWrapper.Until(b.head.extPacket.ReceivedAt.Add(b.latency)))
 	}
 }
 
@@ -369,4 +380,31 @@ func before(a, b uint16) bool {
 
 func withinRange(a, b uint16) bool {
 	return a-b < 3000 || b-a < 3000
+}
+
+// TimeWrapper provides time and timer functionality
+// Allows injection of time dependencies for testing
+type TimeWrapper interface {
+	Now() time.Time
+	NewTimer(d time.Duration) *time.Timer
+	Until(t time.Time) time.Duration
+	Since(t time.Time) time.Duration
+}
+
+type timePackageWrapper struct{} // Default TimeWrapper implementation
+
+func (w *timePackageWrapper) Now() time.Time {
+	return time.Now()
+}
+
+func (w *timePackageWrapper) NewTimer(d time.Duration) *time.Timer {
+	return time.NewTimer(d)
+}
+
+func (w *timePackageWrapper) Until(t time.Time) time.Duration {
+	return time.Until(t)
+}
+
+func (w *timePackageWrapper) Since(t time.Time) time.Duration {
+	return time.Since(t)
 }
