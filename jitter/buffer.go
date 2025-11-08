@@ -48,7 +48,7 @@ type Buffer struct {
 
 	stats       *BufferStats
 	timeWrapper TimeWrapper
-	timer       *time.Timer
+	timer       TimerWrapper
 
 	pool *packet
 	size int
@@ -92,7 +92,7 @@ func NewBuffer(
 	go func() {
 		for {
 			select {
-			case <-b.timer.C:
+			case <-b.timer.C():
 				b.mu.Lock()
 				b.popReady()
 				b.mu.Unlock()
@@ -382,11 +382,33 @@ func withinRange(a, b uint16) bool {
 	return a-b < 3000 || b-a < 3000
 }
 
+type TimerWrapper interface {
+	C() <-chan time.Time
+	Reset(d time.Duration) bool
+	Stop() bool
+}
+
+type timerWrapper struct {
+	timer *time.Timer
+}
+
+func (t *timerWrapper) C() <-chan time.Time {
+	return t.timer.C
+}
+
+func (t *timerWrapper) Reset(d time.Duration) bool {
+	return t.timer.Reset(d)
+}
+
+func (t *timerWrapper) Stop() bool {
+	return t.timer.Stop()
+}
+
 // TimeWrapper provides time and timer functionality
 // Allows injection of time dependencies for testing
 type TimeWrapper interface {
 	Now() time.Time
-	NewTimer(d time.Duration) *time.Timer
+	NewTimer(d time.Duration) TimerWrapper
 	Until(t time.Time) time.Duration
 	Since(t time.Time) time.Duration
 }
@@ -397,8 +419,8 @@ func (w *timePackageWrapper) Now() time.Time {
 	return time.Now()
 }
 
-func (w *timePackageWrapper) NewTimer(d time.Duration) *time.Timer {
-	return time.NewTimer(d)
+func (w *timePackageWrapper) NewTimer(d time.Duration) TimerWrapper {
+	return &timerWrapper{timer: time.NewTimer(d)}
 }
 
 func (w *timePackageWrapper) Until(t time.Time) time.Duration {
