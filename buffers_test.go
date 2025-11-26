@@ -36,4 +36,13 @@ func TestFullFrames(t *testing.T) {
 		{5, 6},
 		{7},
 	}, got)
+
+	err = w.Close()
+	require.NoError(t, err)
+	require.Equal(t, []PCM16Sample{
+		{1, 2},
+		{3, 4},
+		{5, 6},
+		{7},
+	}, got)
 }

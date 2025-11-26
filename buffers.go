@@ -45,21 +45,6 @@ func (b *frameBuffer[T, S]) WriteSample(in T) error {
 }
 
 func (b *frameBuffer[T, S]) flush(force bool) error {
-	if force {
-		it := b.buf
-		b.buf = b.buf[:0]
-		for len(it) > 0 {
-			frame := it
-			if len(frame) > b.frameSize {
-				frame = frame[:b.frameSize]
-			}
-			it = it[len(frame):]
-			if err := b.w.WriteSample(frame); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	it := b.buf
 	defer func() {
 		if len(it) == 0 {
@@ -74,6 +59,12 @@ func (b *frameBuffer[T, S]) flush(force bool) error {
 		if err := b.w.WriteSample(frame); err != nil {
 			return err
 		}
+	}
+	if force && len(it) > 0 {
+		if err := b.w.WriteSample(it); err != nil {
+			return err
+		}
+		it = nil
 	}
 	return nil
 }
