@@ -119,6 +119,7 @@ func NewSeqWriter(w Writer) *SeqWriter {
 
 type Packet = rtp.Packet
 type Header = rtp.Header
+type Attributes = interceptor.Attributes
 
 type Event struct {
 	Type      byte
