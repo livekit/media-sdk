@@ -65,7 +65,7 @@ type testMixer struct {
 func newTestMixer(t testing.TB) *testMixer {
 	m := &testMixer{t: t}
 
-	m.Mixer = newMixer(newTestWriter(&m.sample, 8000), 5, nil, DefaultInputBufferFrames)
+	m.Mixer = newMixer(newTestWriter(&m.sample, 8000), 5, nil)
 	return m
 }
 

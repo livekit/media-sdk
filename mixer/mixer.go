@@ -29,6 +29,7 @@ import (
 
 const (
 	DefaultInputBufferFrames = 5
+	DefaultInputBufferMin    = DefaultInputBufferFrames/2 + 1
 )
 
 type Stats struct {
@@ -49,6 +50,9 @@ type Stats struct {
 
 	OutputSamples atomic.Uint64
 	OutputFrames  atomic.Uint64
+
+	BlockedMixes atomic.Uint64
+	WriteErrors  atomic.Uint64
 }
 
 type Input struct {
@@ -61,6 +65,7 @@ type Input struct {
 
 type Mixer struct {
 	out        msdk.Writer[msdk.PCM16Sample]
+	outchan    chan msdk.PCM16Sample // Write mixed frames to this channel, write to out directly if nil
 	sampleRate int
 
 	mu     sync.Mutex
@@ -85,13 +90,41 @@ type Mixer struct {
 	stats *Stats
 }
 
-func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int, inputBufferFrames int) (*Mixer, error) {
+type MixerOptions func(*Mixer)
+
+func WithOutputChannel() MixerOptions {
+	// This still uses a channel, but it's 1-deep, and would block if the downstream goroutine is blocked.
+	// This preserves the effects of not using a channel at all.
+	return WithOutputChannelSize(1)
+}
+
+// Makes mixer write to a channel in place of directly calling out.WriteSample(), which unblocks the mixer ticker.
+func WithOutputChannelSize(size int) MixerOptions {
+	return func(m *Mixer) {
+		if size <= 0 {
+			size = 1
+		}
+		m.outchan = make(chan msdk.PCM16Sample, size)
+	}
+}
+
+func WithInputBufferFrames(frames int) MixerOptions {
+	return func(m *Mixer) {
+		if frames <= 0 {
+			frames = DefaultInputBufferFrames
+		}
+		m.inputBufferFrames = frames
+		m.inputBufferMin = frames/2 + 1
+	}
+}
+
+func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int, options ...MixerOptions) (*Mixer, error) {
 	if channels != 1 {
 		return nil, fmt.Errorf("only mono mixing is supported")
 	}
 
 	mixSize := int(time.Duration(out.SampleRate()) * bufferDur / time.Second)
-	m := newMixer(out, mixSize, st, inputBufferFrames)
+	m := newMixer(out, mixSize, st, options...)
 	m.tickerDur = bufferDur
 	m.ticker = time.NewTicker(bufferDur)
 
@@ -100,19 +133,24 @@ func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *St
 	return m, nil
 }
 
-func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats, inputBufferFrames int) *Mixer {
+func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats, options ...MixerOptions) *Mixer {
 	if st == nil {
 		st = new(Stats)
 	}
-	return &Mixer{
+	m := &Mixer{
 		out:               out,
+		outchan:           nil, // Write directly to out
 		sampleRate:        out.SampleRate(),
 		mixBuf:            make([]int32, mixSize),
 		mixTmp:            make(msdk.PCM16Sample, mixSize),
 		stats:             st,
-		inputBufferFrames: inputBufferFrames,
-		inputBufferMin:    inputBufferFrames/2 + 1,
+		inputBufferFrames: DefaultInputBufferFrames,
+		inputBufferMin:    DefaultInputBufferMin,
 	}
+	for _, option := range options {
+		option(m)
+	}
+	return m
 }
 
 func (m *Mixer) mixInputs() {
@@ -165,7 +203,18 @@ func (m *Mixer) mixOnce() {
 	m.stats.OutputFrames.Add(1)
 	m.stats.OutputSamples.Add(uint64(len(out)))
 
-	_ = m.out.WriteSample(out)
+	if m.outchan == nil {
+		_ = m.out.WriteSample(out)
+		return
+	} else {
+		select {
+		case m.outchan <- out: // Try ti push without blocking
+		default:
+			// Blocked, wait for output channel to be ready
+			m.stats.BlockedMixes.Add(1)
+			m.outchan <- out // Blocking
+		}
+	}
 }
 
 func (m *Mixer) mixUpdate() {
@@ -203,7 +252,24 @@ func (m *Mixer) mixUpdate() {
 	}
 }
 
+func (m *Mixer) writer() {
+	for {
+		select {
+		case mixed := <-m.outchan:
+			err := m.out.WriteSample(mixed)
+			if err != nil {
+				m.stats.WriteErrors.Add(1)
+			}
+		case <-m.stopped.Watch():
+			return
+		}
+	}
+}
+
 func (m *Mixer) start() {
+	if m.outchan != nil {
+		go m.writer()
+	}
 	defer m.ticker.Stop()
 	for {
 		select {
