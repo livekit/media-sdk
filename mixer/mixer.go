@@ -204,7 +204,10 @@ func (m *Mixer) mixOnce() {
 	m.stats.OutputSamples.Add(uint64(len(out)))
 
 	if m.outchan == nil {
-		_ = m.out.WriteSample(out)
+		err := m.out.WriteSample(out)
+		if err != nil {
+			m.stats.WriteErrors.Add(1)
+		}
 		return
 	} else {
 		select {
