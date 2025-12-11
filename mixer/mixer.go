@@ -29,6 +29,7 @@ import (
 
 const (
 	DefaultInputBufferFrames = 5
+	DefaultInputBufferMin    = DefaultInputBufferFrames/2 + 1
 )
 
 type Stats struct {
@@ -67,11 +68,11 @@ type Mixer struct {
 	inputs []*Input
 
 	tickerDur time.Duration
-	ticker    *time.Ticker
 	mixBuf    []int32          // mix result buffer
 	mixTmp    msdk.PCM16Sample // temp buffer for reading input buffers
 
 	lastMixEndTs time.Time
+	started      core.Fuse
 	stopped      core.Fuse
 	mixCnt       uint
 
@@ -81,38 +82,97 @@ type Mixer struct {
 	// inputBufferMin is the minimal number of buffered frames required to start mixing.
 	// It affects inputs initially, or after they start to starve.
 	inputBufferMin int
+	// inputBufferSpeedup is the threshold of buffered frames (for all inputs) that will trigger repid frame mixing.
+	inputBufferSpeedup int
 
 	stats *Stats
 }
 
-func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int, inputBufferFrames int) (*Mixer, error) {
+type MixerOption func(*Mixer)
+
+func WithInputBufferSpeedup(speedup int) MixerOption {
+	return func(m *Mixer) {
+		if speedup <= 0 {
+			speedup = 0
+		}
+		m.inputBufferSpeedup = speedup
+	}
+}
+
+func WithInputBufferMin(frames int) MixerOption {
+	return func(m *Mixer) {
+		if frames <= 0 {
+			frames = 0
+		}
+		m.inputBufferMin = frames
+	}
+}
+
+func WithInputBufferFrames(frames int) MixerOption {
+	if frames <= 0 {
+		panic("Must provide at least 1 frame buffer")
+	}
+	return func(m *Mixer) {
+		if frames <= 1 {
+			frames = 0
+		}
+		m.inputBufferFrames = frames
+	}
+}
+
+func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int, options ...MixerOption) (*Mixer, error) {
 	if channels != 1 {
 		return nil, fmt.Errorf("only mono mixing is supported")
 	}
 
 	mixSize := int(time.Duration(out.SampleRate()) * bufferDur / time.Second)
-	m := newMixer(out, mixSize, st, inputBufferFrames)
+	m, err := newMixer(out, mixSize, st, options...)
+	if err != nil {
+		return nil, err
+	}
 	m.tickerDur = bufferDur
-	m.ticker = time.NewTicker(bufferDur)
 
-	go m.start()
+	if err := m.Start(); err != nil {
+		return nil, err
+	}
 
 	return m, nil
 }
 
-func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats, inputBufferFrames int) *Mixer {
+func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats, options ...MixerOption) (*Mixer, error) {
 	if st == nil {
 		st = new(Stats)
 	}
-	return &Mixer{
-		out:               out,
-		sampleRate:        out.SampleRate(),
-		mixBuf:            make([]int32, mixSize),
-		mixTmp:            make(msdk.PCM16Sample, mixSize),
-		stats:             st,
-		inputBufferFrames: inputBufferFrames,
-		inputBufferMin:    inputBufferFrames/2 + 1,
+	mixer := &Mixer{
+		out:                out,
+		sampleRate:         out.SampleRate(),
+		mixBuf:             make([]int32, mixSize),
+		mixTmp:             make(msdk.PCM16Sample, mixSize),
+		stats:              st,
+		inputBufferFrames:  DefaultInputBufferFrames,
+		inputBufferMin:     DefaultInputBufferMin,
+		inputBufferSpeedup: 0,
 	}
+	for _, option := range options {
+		option(mixer)
+	}
+	if mixer.inputBufferFrames <= 0 {
+		return nil, fmt.Errorf("inputBufferFrames must be at least 1")
+	}
+	if mixer.inputBufferMin < 0 || mixer.inputBufferMin >= mixer.inputBufferFrames {
+		mixer.inputBufferMin = 0
+	}
+	if mixer.inputBufferSpeedup < 0 || mixer.inputBufferSpeedup >= mixer.inputBufferFrames {
+		mixer.inputBufferSpeedup = 0
+	}
+	return mixer, nil
+}
+
+func (m *Mixer) Start() error {
+	m.started.Once(func() {
+		go m.start()
+	})
+	return nil
 }
 
 func (m *Mixer) mixInputs() {
@@ -204,10 +264,11 @@ func (m *Mixer) mixUpdate() {
 }
 
 func (m *Mixer) start() {
-	defer m.ticker.Stop()
+	ticker := time.NewTicker(m.tickerDur)
+	defer ticker.Stop()
 	for {
 		select {
-		case <-m.ticker.C:
+		case <-ticker.C:
 			m.mixUpdate()
 		case <-m.stopped.Watch():
 			return

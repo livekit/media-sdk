@@ -15,6 +15,7 @@
 package ring
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -150,6 +151,7 @@ func (b *Buffer[T]) Write(p []T) (int, error) {
 			b.full = true
 			return n, nil
 		}
+		fmt.Printf("Dropping %d old samples\n", dn)
 		b.read = (b.read + dn) % len(b.buf) // drop old
 	}
 	dn := copy(b.buf[b.write:], p)

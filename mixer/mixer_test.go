@@ -16,7 +16,9 @@ package mixer
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	msdk "github.com/livekit/media-sdk"
@@ -56,6 +58,180 @@ func (b *testWriter) WriteSample(data msdk.PCM16Sample) error {
 	return nil
 }
 
+func newTestWriter2(sampleRate int, strict bool) *testWriter2 {
+	return &testWriter2{
+		realizations: make([]msdk.PCM16Sample, 0),
+		expectations: make([]msdk.PCM16Sample, 0),
+		sampleRate:   sampleRate,
+		strict:       strict,
+	}
+}
+
+type testWriter2 struct {
+	realizations []msdk.PCM16Sample
+	expectations []msdk.PCM16Sample
+	sampleRate   int
+	strict       bool // If true, will panic if we're receiving a smaple without a queued expectation
+	skippedZero  bool // Whether the first zero frame has been ignored. Needed due to random jitter.
+}
+
+func (b *testWriter2) String() string {
+	return fmt.Sprintf("testWriter2(%d)", b.sampleRate)
+}
+
+func (b *testWriter2) SampleRate() int {
+	return b.sampleRate
+}
+
+func (b *testWriter2) Close() error {
+	return nil
+}
+
+func logSample(msg string, sample msdk.PCM16Sample) {
+	timefmt := time.Now().Format("2006-01-02 15:04:05.000")
+	fmt.Printf("%s: %-9s sample %d\n", timefmt, msg, sample[0])
+}
+
+func (b *testWriter2) Expect(exp msdk.PCM16Sample) {
+	logSample("Expecting", exp)
+	b.expectations = append(b.expectations, exp)
+}
+
+func (b *testWriter2) WriteSample(data msdk.PCM16Sample) error {
+	logSample("Received", data)
+	if len(b.expectations) > 0 {
+		expected := b.expectations[0]
+		b.expectations = b.expectations[1:]
+
+		if !b.skippedZero && expected[0] == 0 && data[0] != 0 {
+			expected = b.expectations[0]
+			b.expectations = b.expectations[1:]
+			b.skippedZero = true
+		}
+
+		if len(data) != len(expected) {
+			panic(fmt.Sprintf("received sample length does not match expectation: %d != %d", len(data), len(expected)))
+		}
+		for i := range data {
+
+			if data[i] != expected[i] {
+				panic(fmt.Sprintf("received sample %d does not match expectation %d", data[i], expected[i]))
+			}
+		}
+		return nil
+	}
+	if b.strict {
+		panic("received sample without expectation")
+	}
+	b.realizations = append(b.realizations, data)
+	return nil
+}
+
+func (b *testWriter2) ReadFrame() msdk.PCM16Sample {
+	if len(b.realizations) == 0 {
+		return nil
+	}
+	frame := b.realizations[0]
+	b.realizations = b.realizations[1:]
+	return frame
+}
+
+func genSample(frameSize int, value int16) msdk.PCM16Sample {
+	sample := make(msdk.PCM16Sample, frameSize)
+	for i := 0; i < frameSize; i++ {
+		sample[i] = value
+	}
+	return sample
+}
+
+// Produce a steady stream of samples, offset by jitter.
+func steadyStream(in *Input, out *testWriter2, frameSize int, frameDur time.Duration, jitter time.Duration, start int, count int) {
+	next := time.Now()
+	end := start + count
+	halfJitter := jitter / 2
+	for i := start; i < end; i++ {
+		next = next.Add(frameDur) // Clean of jitter
+		jitter := time.Duration((rand.Float64() * float64(jitter)) - float64(halfJitter))
+		time.Sleep(time.Until(next.Add(jitter)))
+		frame := genSample(frameSize, int16(i))
+		out.Expect(frame)
+		logSample("Writing", frame)
+		in.WriteSample(frame)
+
+	}
+}
+
+// Produce a burst of samples
+func burst(in *Input, out *testWriter2, frameMax int, frameSize int, frameDur time.Duration, start int, count int) {
+	end := start + count
+	// We may be asked to produce more samples than we can fit in the buffer, so we need to skip some expectations.
+	skipExpect := 0
+	zeroFrame := genSample(frameSize, 0)
+	if count > frameMax {
+		skipExpect = count - frameMax
+	}
+	for i := start; i < end; i++ {
+		if skipExpect > 0 {
+			skipExpect--
+			out.Expect(zeroFrame)
+		} else {
+			out.Expect(genSample(frameSize, int16(i)))
+		}
+	}
+	time.Sleep(time.Duration(count) * frameDur)
+	for i := start; i < end; i++ {
+		frame := genSample(frameSize, int16(i))
+		logSample("Writing", frame)
+		in.WriteSample(frame)
+	}
+}
+
+func testBurstSize(t *testing.T, sampleRate int, frameDur time.Duration, burstCount int) {
+	frameSize := int(time.Duration(sampleRate) * frameDur / time.Second)
+	zeroFrame := genSample(frameSize, 0)
+	output := newTestWriter2(sampleRate, true)
+	stats := Stats{}
+	jitter := 3 * time.Millisecond
+
+	fmt.Printf("\nTesting burst size: %d\n", burstCount)
+	synctest.Test(t, func(t *testing.T) {
+		defer func() {
+			fmt.Printf("stats: %+v\n", stats)
+		}()
+
+		mixer, err := NewMixer(output, frameDur, &stats, 1) // Starts a timer goroutine.
+		require.NoError(t, err)
+		defer mixer.Stop()
+		input := mixer.NewInput()
+		defer input.Close()
+
+		for i := 0; i < mixer.inputBufferMin; i++ {
+			output.Expect(zeroFrame)
+		}
+
+		next := 1
+		fmt.Printf("steadyStream: %d\n", mixer.inputBufferFrames+1)
+		steadyStream(input, output, frameSize, frameDur, jitter, next, mixer.inputBufferFrames+1)
+		next += mixer.inputBufferFrames + 1
+		fmt.Printf("burst: %d\n", burstCount)
+		burst(input, output, mixer.inputBufferFrames, frameSize, frameDur, next, burstCount)
+		next += burstCount
+		fmt.Printf("steadyStream: %d\n", mixer.inputBufferFrames+1)
+		steadyStream(input, output, frameSize, frameDur, jitter, next, mixer.inputBufferFrames+1)
+		next += mixer.inputBufferFrames + 1
+	})
+}
+func TestSyncBursts(t *testing.T) {
+	sampleRate := 8000
+	frameDur := 20 * time.Millisecond
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("burst size %d", i)
+		t.Run(name, func(t *testing.T) {
+			testBurstSize(t, sampleRate, frameDur, i)
+		})
+	}
+}
+
 type testMixer struct {
 	t      testing.TB
 	sample msdk.PCM16Sample
@@ -65,7 +241,9 @@ type testMixer struct {
 func newTestMixer(t testing.TB) *testMixer {
 	m := &testMixer{t: t}
 
-	m.Mixer = newMixer(newTestWriter(&m.sample, 8000), 5, nil, DefaultInputBufferFrames)
+	mixer, err := newMixer(newTestWriter(&m.sample, 8000), 5, nil)
+	require.NoError(t, err)
+	m.Mixer = mixer
 	return m
 }
 
