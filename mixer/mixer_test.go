@@ -16,7 +16,11 @@ package mixer
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	msdk "github.com/livekit/media-sdk"
@@ -56,6 +60,261 @@ func (b *testWriter) WriteSample(data msdk.PCM16Sample) error {
 	return nil
 }
 
+func newSyncWriter(sampleRate int, validate bool) *syncWriter {
+	mu := &sync.Mutex{}
+	mu.Lock()
+	return &syncWriter{
+		validate:       validate,
+		cond:           sync.NewCond(mu),
+		sampleRate:     sampleRate,
+		expectations:   make([]writerExpectation, 0),
+		writtenSamples: make([]msdk.PCM16Sample, 0),
+	}
+}
+
+type writerExpectation struct {
+	sample   msdk.PCM16Sample
+	optional bool
+}
+
+type syncWriter struct {
+	validate       bool
+	running        atomic.Bool
+	cond           *sync.Cond
+	sampleRate     int
+	expectations   []writerExpectation
+	writtenSamples []msdk.PCM16Sample
+}
+
+func (b *syncWriter) Unblock() {
+	b.running.Store(true)
+	b.cond.Signal()
+}
+
+func (b *syncWriter) Expect(sample msdk.PCM16Sample, optional bool) {
+	logSample("Expecting", sample)
+	b.expectations = append(b.expectations, writerExpectation{sample: sample, optional: optional})
+}
+
+func (b *syncWriter) verifySample(sample msdk.PCM16Sample) {
+	if !b.validate {
+		return
+	}
+	for len(b.expectations) > 0 {
+		exp := b.expectations[0]
+		b.expectations = b.expectations[1:]
+		if exp.sample[0] != sample[0] && exp.optional {
+			continue
+		}
+
+		// Skip full verification, we just need to know the start and end of smaple, since the whole range is the same.
+		if exp.sample[0] != sample[0] {
+			panic(fmt.Sprintf("received sample %d does not match expectation %d", sample[0], exp.sample[0]))
+		}
+		if exp.sample[0] != sample[len(sample)-1] {
+			panic(fmt.Sprintf("received sample %d does not match expectation %d", sample[len(sample)-1], exp.sample[len(exp.sample)-1]))
+		}
+		return
+	}
+
+	panic("no matching expectation found")
+}
+
+func (b *syncWriter) String() string {
+	return fmt.Sprintf("syncWriter(%d)", b.sampleRate)
+}
+
+func (b *syncWriter) SampleRate() int {
+	return b.sampleRate
+}
+func (b *syncWriter) Close() error {
+	return nil
+}
+
+func (b *syncWriter) WriteSample(data msdk.PCM16Sample) error {
+	logSample("Mixed", data)
+	if !b.running.Load() {
+		b.cond.Wait()
+	}
+	b.writtenSamples = append(b.writtenSamples, data)
+	if b.validate {
+		b.verifySample(data)
+	}
+	return nil
+}
+
+func logSample(msg string, sample msdk.PCM16Sample) {
+	timefmt := time.Now().Format("2006-01-02 15:04:05.000")
+	fmt.Printf("%s: %-9s sample %d\n", timefmt, msg, sample[0])
+}
+
+func genSample(frameSize int, value int16) msdk.PCM16Sample {
+	sample := make(msdk.PCM16Sample, frameSize)
+	for i := 0; i < frameSize; i++ {
+		sample[i] = value
+	}
+	return sample
+}
+
+func TestBlockingWrites(t *testing.T) {
+	frameDur := 20 * time.Millisecond
+	frameSize := int(time.Duration(8000) * frameDur / time.Second)
+	samples := []msdk.PCM16Sample{
+		genSample(frameSize, 1),
+		genSample(frameSize, 2),
+		genSample(frameSize, 3),
+	}
+
+	t.Run("no channel", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			writer := newSyncWriter(8000, false)
+			mixer, err := NewMixer(writer, 20*time.Millisecond, nil, 1)
+			require.NoError(t, err)
+			defer mixer.Stop()
+
+			input := mixer.NewInput()
+			defer input.Close()
+
+			input.WriteSample(samples[0])
+			input.WriteSample(samples[1])
+			input.WriteSample(samples[2])
+
+			time.Sleep(61 * time.Millisecond)
+			require.Equal(t, 0, len(writer.writtenSamples))
+			writer.Unblock()
+			time.Sleep(time.Millisecond)
+			require.Equal(t, 3, len(writer.writtenSamples))
+		})
+	})
+
+	t.Run("len 1 channel", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			writer := newSyncWriter(8000, false)
+			mixer, err := NewMixer(writer, 20*time.Millisecond, nil, 1, WithOutputChannel())
+			require.NoError(t, err)
+			defer mixer.Stop()
+
+			input := mixer.NewInput()
+			defer input.Close()
+
+			input.WriteSample(samples[0])
+			input.WriteSample(samples[1])
+			input.WriteSample(samples[2])
+
+			time.Sleep(61 * time.Millisecond)
+			require.Equal(t, 0, len(writer.writtenSamples))
+			writer.Unblock()
+			time.Sleep(time.Millisecond)
+			require.Equal(t, 3, len(writer.writtenSamples))
+		})
+	})
+
+	t.Run("len 5 channel", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			writer := newSyncWriter(8000, false)
+			mixer, err := NewMixer(writer, 20*time.Millisecond, nil, 1, WithOutputChannelSize(5))
+			require.NoError(t, err)
+			defer mixer.Stop()
+
+			input := mixer.NewInput()
+			defer input.Close()
+
+			input.WriteSample(samples[0])
+			input.WriteSample(samples[1])
+			input.WriteSample(samples[2])
+
+			time.Sleep(61 * time.Millisecond)
+			require.Equal(t, 0, len(writer.writtenSamples))
+			writer.Unblock()
+			time.Sleep(time.Millisecond)
+			require.Equal(t, 3, len(writer.writtenSamples))
+		})
+	})
+}
+
+// Produce a steady stream of samples, offset by jitter.
+func steadyStream(in *Input, out *syncWriter, frameSize int, frameDur time.Duration, jitter time.Duration, start int, count int) {
+	next := time.Now()
+	end := start + count
+	halfJitter := jitter / 2
+	for i := start; i < end; i++ {
+		next = next.Add(frameDur) // Clean of jitter
+		jitter := time.Duration((rand.Float64() * float64(jitter)) - float64(halfJitter))
+		time.Sleep(time.Until(next.Add(jitter)))
+		frame := genSample(frameSize, int16(i))
+		out.Expect(frame, false)
+		logSample("Writing", frame)
+		in.WriteSample(frame)
+
+	}
+}
+
+// Produce a burst of samples
+func burst(in *Input, out *syncWriter, frameMax int, frameSize int, frameDur time.Duration, start int, count int) {
+	end := start + count
+	zeroFrame := genSample(frameSize, 0)
+	for i := start; i < end; i++ {
+		out.Expect(zeroFrame, true)
+	}
+	skip := count - frameMax
+	for i := start; i < end; i++ {
+		skip--
+		if skip >= 0 {
+			continue
+		}
+		out.Expect(genSample(frameSize, int16(i)), skip == -1) // First non-skipped frame may still be overwritten due to jitter.
+	}
+	time.Sleep((time.Duration(count) * frameDur))
+	for i := start; i < end; i++ {
+		frame := genSample(frameSize, int16(i))
+		logSample("Writing", frame)
+		in.WriteSample(frame)
+	}
+}
+
+func testBurstSize(t *testing.T, sampleRate int, frameDur time.Duration, burstCount int) {
+	frameSize := int(time.Duration(sampleRate) * frameDur / time.Second)
+	zeroFrame := genSample(frameSize, 0)
+	jitter := 3 * time.Millisecond
+
+	fmt.Printf("\nTesting burst size: %d\n", burstCount)
+	synctest.Test(t, func(t *testing.T) {
+		output := newSyncWriter(sampleRate, true)
+		output.Unblock()
+		mixer, err := NewMixer(output, frameDur, nil, 1, WithOutputChannel()) // Starts a timer goroutine.
+		require.NoError(t, err)
+		defer mixer.Stop()
+		input := mixer.NewInput()
+		defer input.Close()
+
+		for i := 0; i < mixer.inputBufferMin; i++ {
+			output.Expect(zeroFrame, true)
+		}
+
+		next := 1
+		fmt.Printf("steadyStream: %d\n", mixer.inputBufferFrames+1)
+		steadyStream(input, output, frameSize, frameDur, jitter, next, mixer.inputBufferFrames+1)
+		next += mixer.inputBufferFrames + 1
+		fmt.Printf("burst: %d\n", burstCount)
+		burst(input, output, mixer.inputBufferFrames, frameSize, frameDur, next, burstCount)
+		next += burstCount
+		fmt.Printf("steadyStream: %d\n", mixer.inputBufferFrames+1)
+		steadyStream(input, output, frameSize, frameDur, jitter, next, mixer.inputBufferFrames+1)
+		next += mixer.inputBufferFrames + 1
+	})
+}
+
+func TestSyncBursts(t *testing.T) {
+	sampleRate := 8000
+	frameDur := 20 * time.Millisecond
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("burst size %d", i)
+		t.Run(name, func(t *testing.T) {
+			testBurstSize(t, sampleRate, frameDur, i)
+		})
+	}
+}
+
 type testMixer struct {
 	t      testing.TB
 	sample msdk.PCM16Sample
@@ -65,7 +324,8 @@ type testMixer struct {
 func newTestMixer(t testing.TB) *testMixer {
 	m := &testMixer{t: t}
 
-	m.Mixer = newMixer(newTestWriter(&m.sample, 8000), 5, nil)
+	mixer := newMixer(newTestWriter(&m.sample, 8000), 5, nil)
+	m.Mixer = mixer
 	return m
 }
 
