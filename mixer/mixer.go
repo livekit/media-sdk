@@ -232,6 +232,7 @@ func (m *Mixer) mixUpdate() {
 		// In case scheduler stops us for too long, we will detect it and run mix multiple times.
 		// This happens if we get scheduled by OS/K8S on a lot of CPUs, but for a very short time.
 		if dt := now.Sub(m.lastMixEndTs); dt > 0 {
+			dt += m.tickerDur / 4 // Account for wake-up jitter
 			n = int(dt / m.tickerDur)
 			m.lastMixEndTs = m.lastMixEndTs.Add(time.Duration(n) * m.tickerDur)
 			if n == 1 {
