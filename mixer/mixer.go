@@ -235,15 +235,15 @@ func (m *Mixer) mixUpdate() {
 			dt += m.tickerDur / 4 // Account for wake-up jitter
 			n = int(dt / m.tickerDur)
 			m.lastMixEndTs = m.lastMixEndTs.Add(time.Duration(n) * m.tickerDur)
-			if n == 1 {
+			switch n {
+			case 0: // Baseline lastMixEndTs got set later than necessary
+				m.stats.ZeroMixes.Add(1)
+			case 1: // All is well
 				m.stats.TimedMixes.Add(1)
-			} else if n != 0 {
+			default: // We've not woken up in quite some time, count the skipped mixes as jumps
 				m.stats.JumpMixes.Add(uint64(n))
 			}
 		}
-	}
-	if n == 0 {
-		m.stats.ZeroMixes.Add(1)
 	}
 	if n > m.inputBufferFrames {
 		n = m.inputBufferFrames
