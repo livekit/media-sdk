@@ -211,7 +211,7 @@ func (m *Mixer) mixOnce() {
 		return
 	} else {
 		select {
-		case m.outchan <- out: // Try ti push without blocking
+		case m.outchan <- out: // Try to push without blocking
 		default:
 			// Blocked, wait for output channel to be ready
 			m.stats.BlockedMixes.Add(1)
