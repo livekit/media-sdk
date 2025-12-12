@@ -29,6 +29,7 @@ import (
 
 const (
 	DefaultInputBufferFrames = 5
+	DefaultInputBufferMin    = DefaultInputBufferFrames/2 + 1
 )
 
 type Stats struct {
@@ -36,10 +37,11 @@ type Stats struct {
 	TracksTotal atomic.Uint64
 	Restarts    atomic.Uint64
 
-	Mixes      atomic.Uint64
-	TimedMixes atomic.Uint64
-	JumpMixes  atomic.Uint64
-	ZeroMixes  atomic.Uint64
+	Mixes         atomic.Uint64
+	TimedMixes    atomic.Uint64
+	JumpMixes     atomic.Uint64
+	ZeroMixes     atomic.Uint64
+	NegativeMixes atomic.Uint64
 
 	InputSamples atomic.Uint64
 	InputFrames  atomic.Uint64
@@ -49,6 +51,8 @@ type Stats struct {
 
 	OutputSamples atomic.Uint64
 	OutputFrames  atomic.Uint64
+
+	WriteErrors atomic.Uint64
 }
 
 type Input struct {
@@ -85,34 +89,56 @@ type Mixer struct {
 	stats *Stats
 }
 
-func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, st *Stats, channels int, inputBufferFrames int) (*Mixer, error) {
+type MixerOptions func(*Mixer)
+
+func WithInputBufferFrames(frames int) MixerOptions {
+	return func(m *Mixer) {
+		if frames <= 0 {
+			frames = DefaultInputBufferFrames
+		}
+		m.inputBufferFrames = frames
+		m.inputBufferMin = frames/2 + 1
+	}
+}
+
+func WithStats(stats *Stats) MixerOptions {
+	return func(m *Mixer) {
+		m.stats = stats
+	}
+}
+
+func NewMixer(out msdk.Writer[msdk.PCM16Sample], bufferDur time.Duration, channels int, options ...MixerOptions) (*Mixer, error) {
 	if channels != 1 {
 		return nil, fmt.Errorf("only mono mixing is supported")
 	}
 
 	mixSize := int(time.Duration(out.SampleRate()) * bufferDur / time.Second)
-	m := newMixer(out, mixSize, st, inputBufferFrames)
+	m := newMixer(out, mixSize, options...)
 	m.tickerDur = bufferDur
 	m.ticker = time.NewTicker(bufferDur)
 
-	go m.start()
+	go m.start() // m.lastMixEndTs set at allocation
 
 	return m, nil
 }
 
-func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, st *Stats, inputBufferFrames int) *Mixer {
-	if st == nil {
-		st = new(Stats)
-	}
-	return &Mixer{
+func newMixer(out msdk.Writer[msdk.PCM16Sample], mixSize int, options ...MixerOptions) *Mixer {
+	m := &Mixer{
 		out:               out,
 		sampleRate:        out.SampleRate(),
 		mixBuf:            make([]int32, mixSize),
 		mixTmp:            make(msdk.PCM16Sample, mixSize),
-		stats:             st,
-		inputBufferFrames: inputBufferFrames,
-		inputBufferMin:    inputBufferFrames/2 + 1,
+		inputBufferFrames: DefaultInputBufferFrames,
+		inputBufferMin:    DefaultInputBufferMin,
+		lastMixEndTs:      time.Now(), // Must set before starting the ticker
 	}
+	for _, option := range options {
+		option(m)
+	}
+	if m.stats == nil {
+		m.stats = new(Stats)
+	}
+	return m
 }
 
 func (m *Mixer) mixInputs() {
@@ -165,39 +191,46 @@ func (m *Mixer) mixOnce() {
 	m.stats.OutputFrames.Add(1)
 	m.stats.OutputSamples.Add(uint64(len(out)))
 
-	_ = m.out.WriteSample(out)
+	err := m.out.WriteSample(out)
+	if err != nil {
+		m.stats.WriteErrors.Add(1)
+	}
 }
 
 func (m *Mixer) mixUpdate() {
 	n := 0
 	now := time.Now()
 
-	if m.lastMixEndTs.IsZero() {
-		m.stats.TimedMixes.Add(1)
-		m.lastMixEndTs = now
-		n = 1
-	} else {
-		// In case scheduler stops us for too long, we will detect it and run mix multiple times.
-		// This happens if we get scheduled by OS/K8S on a lot of CPUs, but for a very short time.
-		if dt := now.Sub(m.lastMixEndTs); dt > 0 {
-			n = int(dt / m.tickerDur)
-			m.lastMixEndTs = m.lastMixEndTs.Add(time.Duration(n) * m.tickerDur)
-			if n == 1 {
-				m.stats.TimedMixes.Add(1)
-			} else if n != 0 {
-				m.stats.JumpMixes.Add(uint64(n))
-			}
-		}
+	// The one thing we're guaranteed at this point is this metohd is called at least m.tickerDur since the last processed tick.
+	// Note: This does not necessarily imply at least m.tickerDur since the last time this function ran.
+	// Examples:
+	// 1. The ticker goroutine was blocked on downstream WriteSample, and missed ticks.
+	// 2. There was delay receiving control from the scheduler since the ticker fired.
+	//    This can both mean missing ticks entirely much like the previous example,
+	//    or that the next tick is going to be quicker than +m.tickerDur from now.
+	// 3. The baseline got reset.
+	//
+	// In case scheduler stops us for too long, we will detect it and run mix multiple times.
+	// This happens if we get scheduled by OS/K8S on a lot of CPUs, but for a very short time.
+	dt := now.Sub(m.lastMixEndTs)
+	if dt < 0 {
+		// This should never happen
+		m.stats.NegativeMixes.Add(1)
+		return
 	}
-	if n == 0 {
+	n = int(dt / m.tickerDur)                                           // How many whole ticks we need to process
+	m.lastMixEndTs = m.lastMixEndTs.Add(time.Duration(n) * m.tickerDur) // now, rounded down to baseline + n*tickerDur.
+	switch n {
+	case 0: // Can happen when the previous mix skipped at least one tick.
 		m.stats.ZeroMixes.Add(1)
+	case 1: // All is well
+		m.stats.TimedMixes.Add(1)
+	default: // We've not woken up in quite some time, count the skipped mixes as jumps
+		m.stats.JumpMixes.Add(uint64(n))
 	}
 	if n > m.inputBufferFrames {
 		n = m.inputBufferFrames
-		// reset
-		m.lastMixEndTs = now
 	}
-
 	for i := 0; i < n; i++ {
 		m.mixOnce()
 	}
