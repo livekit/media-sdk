@@ -15,6 +15,7 @@
 package jitter
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -43,6 +44,7 @@ type Buffer struct {
 
 	initialized bool
 	prevSN      uint16
+	prevTS      uint32
 	head        *packet
 	tail        *packet
 
@@ -51,6 +53,9 @@ type Buffer struct {
 
 	pool *packet
 	size int
+
+	maxSequenceJump  *uint16
+	maxTimestampJump *uint32
 }
 
 type Option func(*Buffer)
@@ -109,6 +114,18 @@ func WithLogger(logger logger.Logger) Option {
 func WithPacketLossHandler(handler func()) Option {
 	return func(b *Buffer) {
 		b.onPacketLoss = handler
+	}
+}
+
+func WithMaxSequenceJump(max uint16) Option {
+	return func(b *Buffer) {
+		b.maxSequenceJump = &max
+	}
+}
+
+func WithMaxTimestampJump(max uint32) Option {
+	return func(b *Buffer) {
+		b.maxTimestampJump = &max
 	}
 }
 
@@ -187,6 +204,86 @@ func (b *Buffer) Close() {
 	b.closed.Break()
 }
 
+func (b *Buffer) isLargeTimestampJump(current, prev uint32) bool {
+	if b.maxTimestampJump == nil || !b.initialized {
+		return false
+	}
+
+	maxJump := uint32(*b.maxTimestampJump)
+
+	cur := int64(current)
+	prv := int64(prev)
+
+	forwardDiff := cur - prv
+	if forwardDiff < 0 {
+		forwardDiff += int64(math.MaxUint32) + 1
+	}
+
+	backwardDiff := prv - cur
+	if backwardDiff < 0 {
+		backwardDiff += int64(math.MaxUint32) + 1
+	}
+
+	return min(backwardDiff, forwardDiff) > int64(maxJump)
+}
+
+func (b *Buffer) isLargeSequenceJump(current, prev uint16) bool {
+	if b.maxSequenceJump == nil || !b.initialized {
+		return false
+	}
+
+	maxJump := int32(*b.maxSequenceJump)
+
+	cur := int32(current)
+	prv := int32(prev)
+
+	forwardDiff := cur - prv
+	if forwardDiff < 0 {
+		forwardDiff += int32(math.MaxUint16) + 1
+	}
+
+	backwardDiff := prv - cur
+	if backwardDiff < 0 {
+		backwardDiff += int32(math.MaxUint16) + 1
+	}
+
+	return min(backwardDiff, forwardDiff) > maxJump
+}
+
+func (b *Buffer) reset() {
+	b.logger.Infow("resetting jitter buffer due to RTP discontinuity")
+
+	dropped := 0
+	for b.head != nil {
+		next := b.head.next
+		if !b.head.extPacket.Padding {
+			dropped++
+		}
+		b.free(b.head)
+		b.head = next
+	}
+	b.tail = nil
+
+	if dropped > 0 {
+		b.stats.PacketsDropped += uint64(dropped)
+		if b.onPacketLoss != nil {
+			b.onPacketLoss()
+		}
+	}
+
+	b.initialized = false
+	b.prevSN = 0
+	b.prevTS = 0
+
+	if !b.timer.Stop() {
+		select {
+		case <-b.timer.C:
+		default:
+		}
+	}
+	b.timer.Reset(b.latency)
+}
+
 // push adds a packet to the buffer
 func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	b.stats.PacketsPushed++
@@ -197,8 +294,19 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		}
 	}
 
+	if b.isLargeTimestampJump(pkt.Timestamp, b.prevTS) ||
+		b.isLargeSequenceJump(pkt.SequenceNumber, b.prevSN) {
+		b.logger.Infow("large RTP discontinuity detected",
+			"current_ts", pkt.Timestamp,
+			"prev_ts", b.prevTS,
+			"current_sn", pkt.SequenceNumber,
+			"prev_sn", b.prevSN,
+		)
+		b.reset()
+	}
+
 	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
-		// packet expired
+		// packet expired (not after discontinuity reset)
 		if !pkt.Padding {
 			b.stats.PacketsDropped++
 			if b.onPacketLoss != nil {
@@ -354,6 +462,7 @@ func (b *Buffer) popSample() []ExtPacket {
 func (b *Buffer) popHead() *packet {
 	c := b.head
 	b.prevSN = c.extPacket.SequenceNumber
+	b.prevTS = c.extPacket.Timestamp
 	b.head = c.next
 	if b.head == nil {
 		b.tail = nil
