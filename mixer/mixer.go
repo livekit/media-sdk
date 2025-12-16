@@ -196,8 +196,7 @@ func (m *Mixer) mixOnce() {
 	m.reset()
 	m.mixInputs()
 
-	// TODO: if we can guarantee that WriteSample won't store the sample, we can avoid allocation
-	out := make(msdk.PCM16Sample, len(m.mixBuf))
+	out := make(msdk.PCM16Sample, len(m.mixBuf)) // Can be buffered by either channel or m.out
 	for i, v := range m.mixBuf {
 		if v > 0x7FFF {
 			v = 0x7FFF
@@ -225,7 +224,7 @@ func (m *Mixer) mixOnce() {
 			m.stats.BlockedMixes.Add(1)
 			// Blocking, mimics behavior witohut channel
 			// TODO: Consider, carefully, dropping when blocked
-			m.outchan <- out 
+			m.outchan <- out
 		}
 	}
 }
