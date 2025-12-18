@@ -368,10 +368,6 @@ func (b *Buffer) Flush() {
 	if (loss || dropped) && b.onPacketLoss != nil {
 		b.onPacketLoss()
 	}
-
-	if b.head != nil {
-		b.timer.Reset(time.Until(b.head.extPacket.ReceivedAt.Add(b.latency)))
-	}
 }
 
 func (b *Buffer) popSample() []ExtPacket {
