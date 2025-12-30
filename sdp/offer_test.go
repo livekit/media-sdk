@@ -345,7 +345,6 @@ func TestSDPMediaAnswer(t *testing.T) {
 }
 
 func TestSDPMediaAnswerOneDisabled(t *testing.T) {
-	const port = 12345
 	offer := sdp.MediaDescription{
 		MediaName: sdp.MediaName{
 			Formats: []string{"9", "0", "8", "101"},
