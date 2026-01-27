@@ -69,10 +69,11 @@ func ListenUDPPortRange(portMin, portMax int, ip netip.Addr) (*net.UDPConn, erro
 	})
 }
 
-func ListenUDPPortRangeWithLC(portMin, portMax int, ip netip.Addr, lc *net.ListenConfig) (*net.UDPConn, error) {
+func ListenUDPPortRangeWithConfig(portMin, portMax int, ip netip.Addr, lc *net.ListenConfig) (*net.UDPConn, error) {
+	ctx := context.Background() // ctx is only used to resolve domain names, which we don't use here.
 	ipStr := ip.String()
 	return bindRange(portMin, portMax, ip, func(port int, ip netip.Addr) (*net.UDPConn, error) {
-		conn, err := lc.ListenPacket(context.Background(), "udp", fmt.Sprintf("%s:%d", ipStr, port))
+		conn, err := lc.ListenPacket(ctx, "udp", fmt.Sprintf("%s:%d", ipStr, port))
 		if err != nil {
 			return nil, err
 		}
