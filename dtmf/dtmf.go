@@ -172,6 +172,21 @@ func DecodeRTP(h *rtp.Header, payload []byte) (Event, bool) {
 	return ev, true
 }
 
+// DecodeRTPEndBit decodes a DTMF event from an RTP packet using the End bit
+// instead of the Marker bit to determine event completion.
+// This is useful for SIP providers that do not set the Marker bit on DTMF packets.
+// See RFC 4733 §2.3.1.
+func DecodeRTPEndBit(h *rtp.Header, payload []byte) (Event, bool) {
+	ev, err := Decode(payload)
+	if err != nil {
+		return Event{}, false
+	}
+	if !ev.End {
+		return Event{}, false
+	}
+	return ev, true
+}
+
 func Encode(out []byte, ev Event) (int, error) {
 	if len(out) < 4 {
 		return 0, io.ErrShortBuffer
