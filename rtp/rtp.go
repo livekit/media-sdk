@@ -24,7 +24,7 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 
-	"github.com/livekit/media-sdk"
+	"github.com/usluio/media-sdk"
 )
 
 const rtpStreamTSResetFrames = 25 // 500ms @ ptime=20ms
