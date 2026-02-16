@@ -22,7 +22,7 @@ import (
 
 	"github.com/jfreymuth/oggvorbis"
 
-	"github.com/livekit/media-sdk"
+	"github.com/usluio/media-sdk"
 )
 
 //go:embed enter_pin.ogg

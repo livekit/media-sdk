@@ -19,8 +19,8 @@ import (
 	"math"
 	"time"
 
-	"github.com/livekit/media-sdk"
-	"github.com/livekit/media-sdk/rtp"
+	"github.com/usluio/media-sdk"
+	"github.com/usluio/media-sdk/rtp"
 )
 
 type Hz uint32

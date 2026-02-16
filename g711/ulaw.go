@@ -20,8 +20,8 @@ import (
 
 	prtp "github.com/pion/rtp"
 
-	"github.com/livekit/media-sdk"
-	"github.com/livekit/media-sdk/rtp"
+	"github.com/usluio/media-sdk"
+	"github.com/usluio/media-sdk/rtp"
 )
 
 const ULawSDPName = "PCMU/8000"

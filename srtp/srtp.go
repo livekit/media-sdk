@@ -24,7 +24,7 @@ import (
 
 	"github.com/livekit/protocol/logger"
 
-	"github.com/livekit/media-sdk/rtp"
+	"github.com/usluio/media-sdk/rtp"
 )
 
 var defaultProfiles = []ProtectionProfile{

@@ -15,7 +15,7 @@
 package rtp
 
 import (
-	"github.com/livekit/media-sdk"
+	"github.com/usluio/media-sdk"
 )
 
 // WARNING: Do NOT change the constants because other services depend on it.

@@ -22,9 +22,9 @@ import (
 	"time"
 
 	"github.com/frostbyte73/core"
-	msdk "github.com/livekit/media-sdk"
+	msdk "github.com/usluio/media-sdk"
 
-	"github.com/livekit/media-sdk/ring"
+	"github.com/usluio/media-sdk/ring"
 )
 
 const (

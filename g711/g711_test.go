@@ -35,7 +35,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/livekit/media-sdk"
+	"github.com/usluio/media-sdk"
 )
 
 func TestG711(t *testing.T) {

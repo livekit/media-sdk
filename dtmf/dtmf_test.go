@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/livekit/media-sdk/rtp"
+	"github.com/usluio/media-sdk/rtp"
 )
 
 func TestDTMF(t *testing.T) {

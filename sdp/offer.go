@@ -28,10 +28,10 @@ import (
 
 	"github.com/pion/sdp/v3"
 
-	"github.com/livekit/media-sdk"
-	"github.com/livekit/media-sdk/dtmf"
-	"github.com/livekit/media-sdk/rtp"
-	"github.com/livekit/media-sdk/srtp"
+	"github.com/usluio/media-sdk"
+	"github.com/usluio/media-sdk/dtmf"
+	"github.com/usluio/media-sdk/rtp"
+	"github.com/usluio/media-sdk/srtp"
 )
 
 var (

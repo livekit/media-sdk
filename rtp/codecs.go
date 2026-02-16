@@ -19,7 +19,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/livekit/media-sdk"
+	"github.com/usluio/media-sdk"
 )
 
 var (
