@@ -28,10 +28,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/usluio/media-sdk"
-	"github.com/usluio/media-sdk/res"
-	"github.com/usluio/media-sdk/res/testdata"
-	"github.com/usluio/media-sdk/webm"
+	"github.com/livekit/media-sdk"
+	"github.com/livekit/media-sdk/res"
+	"github.com/livekit/media-sdk/res/testdata"
+	"github.com/livekit/media-sdk/webm"
 )
 
 type paceWriter struct {

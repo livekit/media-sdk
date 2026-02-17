@@ -19,7 +19,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"github.com/usluio/media-sdk/jitter"
+	"github.com/livekit/media-sdk/jitter"
 )
 
 const (

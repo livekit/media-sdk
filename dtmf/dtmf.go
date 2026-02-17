@@ -21,9 +21,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/usluio/media-sdk"
-	"github.com/usluio/media-sdk/rtp"
-	"github.com/usluio/media-sdk/tones"
+	"github.com/livekit/media-sdk"
+	"github.com/livekit/media-sdk/rtp"
+	"github.com/livekit/media-sdk/tones"
 )
 
 const SDPName = "telephone-event/8000"
