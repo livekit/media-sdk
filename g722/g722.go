@@ -23,8 +23,8 @@ import (
 	"github.com/gotranspile/g722"
 	prtp "github.com/pion/rtp"
 
-	"github.com/usluio/media-sdk"
-	"github.com/usluio/media-sdk/rtp"
+	"github.com/livekit/media-sdk"
+	"github.com/livekit/media-sdk/rtp"
 )
 
 const SDPName = "G722/8000"

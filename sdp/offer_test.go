@@ -26,12 +26,12 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/usluio/media-sdk"
-	"github.com/usluio/media-sdk/g711"
-	"github.com/usluio/media-sdk/g722"
-	"github.com/usluio/media-sdk/rtp"
-	. "github.com/usluio/media-sdk/sdp"
-	"github.com/usluio/media-sdk/srtp"
+	"github.com/livekit/media-sdk"
+	"github.com/livekit/media-sdk/g711"
+	"github.com/livekit/media-sdk/g722"
+	"github.com/livekit/media-sdk/rtp"
+	. "github.com/livekit/media-sdk/sdp"
+	"github.com/livekit/media-sdk/srtp"
 	"github.com/livekit/protocol/logger"
 )
 

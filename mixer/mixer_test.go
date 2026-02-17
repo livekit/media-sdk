@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	msdk "github.com/usluio/media-sdk"
+	msdk "github.com/livekit/media-sdk"
 	"github.com/stretchr/testify/require"
 )
 

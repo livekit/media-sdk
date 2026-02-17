@@ -17,7 +17,7 @@ package sdp
 import (
 	"strings"
 
-	"github.com/usluio/media-sdk"
+	"github.com/livekit/media-sdk"
 )
 
 var (

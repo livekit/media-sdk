@@ -24,9 +24,9 @@ import (
 
 	"github.com/livekit/protocol/logger"
 
-	"github.com/usluio/media-sdk"
-	"github.com/usluio/media-sdk/rtp"
-	"github.com/usluio/media-sdk/webm"
+	"github.com/livekit/media-sdk"
+	"github.com/livekit/media-sdk/rtp"
+	"github.com/livekit/media-sdk/webm"
 )
 
 /*
