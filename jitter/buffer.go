@@ -32,11 +32,12 @@ type ExtPacket struct {
 }
 
 type Buffer struct {
-	depacketizer rtp.Depacketizer
-	latency      time.Duration
-	logger       logger.Logger
-	onPacket     PacketFunc
-	onPacketLoss func()
+	depacketizer     rtp.Depacketizer
+	latency          time.Duration
+	logger           logger.Logger
+	onPacket         PacketFunc
+	onPacketLoss     func()
+	onPacketLossStat func(stats *BufferStats)
 
 	mu     sync.Mutex
 	closed core.Fuse
@@ -112,6 +113,12 @@ func WithPacketLossHandler(handler func()) Option {
 	}
 }
 
+func WithPacketLossStatsHandler(handler func(stats *BufferStats)) Option {
+	return func(b *Buffer) {
+		b.onPacketLossStat = handler
+	}
+}
+
 func (b *Buffer) WithLogger(logger logger.Logger) *Buffer {
 	b.logger = logger
 	return b
@@ -163,7 +170,11 @@ func (b *Buffer) Size() int {
 func (b *Buffer) Stats() *BufferStats {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.copyStatsLocked()
+}
 
+// copyStatsLocked returns a copy of current stats. Caller must hold b.mu.
+func (b *Buffer) copyStatsLocked() *BufferStats {
 	return &BufferStats{
 		PacketsPushed:  b.stats.PacketsPushed,
 		PaddingPushed:  b.stats.PaddingPushed,
@@ -203,6 +214,9 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 			b.stats.PacketsDropped++
 			if b.onPacketLoss != nil {
 				b.onPacketLoss()
+			}
+			if b.onPacketLossStat != nil {
+				b.onPacketLossStat(b.copyStatsLocked())
 			}
 		}
 		return
@@ -301,8 +315,13 @@ func (b *Buffer) popReady() {
 		}
 	}
 
-	if loss && b.onPacketLoss != nil {
-		b.onPacketLoss()
+	if loss {
+		if b.onPacketLoss != nil {
+			b.onPacketLoss()
+		}
+		if b.onPacketLossStat != nil {
+			b.onPacketLossStat(b.copyStatsLocked())
+		}
 	}
 
 	if b.head != nil {
@@ -314,8 +333,13 @@ func (b *Buffer) popReady() {
 func (b *Buffer) dropIncompleteExpired(expiry time.Time) {
 	dropped := b.dropIncomplete(expiry, false)
 
-	if dropped && b.onPacketLoss != nil {
-		b.onPacketLoss()
+	if dropped {
+		if b.onPacketLoss != nil {
+			b.onPacketLoss()
+		}
+		if b.onPacketLossStat != nil {
+			b.onPacketLossStat(b.copyStatsLocked())
+		}
 	}
 }
 
@@ -365,8 +389,13 @@ func (b *Buffer) Flush() {
 		}
 	}
 
-	if (loss || dropped) && b.onPacketLoss != nil {
-		b.onPacketLoss()
+	if loss || dropped {
+		if b.onPacketLoss != nil {
+			b.onPacketLoss()
+		}
+		if b.onPacketLossStat != nil {
+			b.onPacketLossStat(b.copyStatsLocked())
+		}
 	}
 }
 
