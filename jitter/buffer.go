@@ -36,8 +36,7 @@ type Buffer struct {
 	latency          time.Duration
 	logger           logger.Logger
 	onPacket         PacketFunc
-	onPacketLoss     func()
-	onPacketLossStat func(stats *BufferStats)
+	onPacketLoss     func(uint64, uint64) // packets lost, packets dropped
 
 	mu     sync.Mutex
 	closed core.Fuse
@@ -107,15 +106,9 @@ func WithLogger(logger logger.Logger) Option {
 	}
 }
 
-func WithPacketLossHandler(handler func()) Option {
+func WithPacketLossHandler(handler func(uint64, uint64)) Option {
 	return func(b *Buffer) {
 		b.onPacketLoss = handler
-	}
-}
-
-func WithPacketLossStatsHandler(handler func(stats *BufferStats)) Option {
-	return func(b *Buffer) {
-		b.onPacketLossStat = handler
 	}
 }
 
@@ -213,10 +206,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		if !pkt.Padding {
 			b.stats.PacketsDropped++
 			if b.onPacketLoss != nil {
-				b.onPacketLoss()
-			}
-			if b.onPacketLossStat != nil {
-				b.onPacketLossStat(b.copyStatsLocked())
+				b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 			}
 		}
 		return
@@ -317,10 +307,7 @@ func (b *Buffer) popReady() {
 
 	if loss {
 		if b.onPacketLoss != nil {
-			b.onPacketLoss()
-		}
-		if b.onPacketLossStat != nil {
-			b.onPacketLossStat(b.copyStatsLocked())
+			b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 		}
 	}
 
@@ -335,10 +322,7 @@ func (b *Buffer) dropIncompleteExpired(expiry time.Time) {
 
 	if dropped {
 		if b.onPacketLoss != nil {
-			b.onPacketLoss()
-		}
-		if b.onPacketLossStat != nil {
-			b.onPacketLossStat(b.copyStatsLocked())
+			b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 		}
 	}
 }
@@ -391,10 +375,7 @@ func (b *Buffer) Flush() {
 
 	if loss || dropped {
 		if b.onPacketLoss != nil {
-			b.onPacketLoss()
-		}
-		if b.onPacketLossStat != nil {
-			b.onPacketLossStat(b.copyStatsLocked())
+			b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 		}
 	}
 }
