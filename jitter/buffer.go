@@ -36,7 +36,7 @@ type Buffer struct {
 	latency      time.Duration
 	logger       logger.Logger
 	onPacket     PacketFunc
-	onPacketLoss func(uint64, uint64) // packets lost, packets dropped
+	onPacketLoss PacketLossFunc
 
 	mu     sync.Mutex
 	closed core.Fuse
@@ -65,6 +65,10 @@ type BufferStats struct {
 }
 
 type PacketFunc func(packets []ExtPacket)
+
+// PacketLossFunc is called when packet loss or drops are detected.
+// packetsLost and packetsDropped represent the number of packets lost and dropped up to the point of the call.
+type PacketLossFunc func(packetsLost, packetsDropped uint64)
 
 func NewBuffer(
 	depacketizer rtp.Depacketizer,
@@ -106,7 +110,7 @@ func WithLogger(logger logger.Logger) Option {
 	}
 }
 
-func WithPacketLossHandler(handler func(uint64, uint64)) Option {
+func WithPacketLossHandler(handler PacketLossFunc) Option {
 	return func(b *Buffer) {
 		b.onPacketLoss = handler
 	}
