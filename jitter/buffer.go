@@ -32,11 +32,11 @@ type ExtPacket struct {
 }
 
 type Buffer struct {
-	depacketizer     rtp.Depacketizer
-	latency          time.Duration
-	logger           logger.Logger
-	onPacket         PacketFunc
-	onPacketLoss     func(uint64, uint64) // packets lost, packets dropped
+	depacketizer rtp.Depacketizer
+	latency      time.Duration
+	logger       logger.Logger
+	onPacket     PacketFunc
+	onPacketLoss func(uint64, uint64) // packets lost, packets dropped
 
 	mu     sync.Mutex
 	closed core.Fuse
@@ -163,11 +163,7 @@ func (b *Buffer) Size() int {
 func (b *Buffer) Stats() *BufferStats {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.copyStatsLocked()
-}
 
-// copyStatsLocked returns a copy of current stats. Caller must hold b.mu.
-func (b *Buffer) copyStatsLocked() *BufferStats {
 	return &BufferStats{
 		PacketsPushed:  b.stats.PacketsPushed,
 		PaddingPushed:  b.stats.PaddingPushed,
@@ -305,10 +301,8 @@ func (b *Buffer) popReady() {
 		}
 	}
 
-	if loss {
-		if b.onPacketLoss != nil {
-			b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
-		}
+	if loss && b.onPacketLoss != nil {
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 	}
 
 	if b.head != nil {
@@ -320,10 +314,8 @@ func (b *Buffer) popReady() {
 func (b *Buffer) dropIncompleteExpired(expiry time.Time) {
 	dropped := b.dropIncomplete(expiry, false)
 
-	if dropped {
-		if b.onPacketLoss != nil {
-			b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
-		}
+	if dropped && b.onPacketLoss != nil {
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 	}
 }
 
@@ -373,10 +365,8 @@ func (b *Buffer) Flush() {
 		}
 	}
 
-	if loss || dropped {
-		if b.onPacketLoss != nil {
-			b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
-		}
+	if (loss || dropped) && b.onPacketLoss != nil {
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 	}
 }
 

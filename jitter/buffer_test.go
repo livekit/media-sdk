@@ -259,7 +259,7 @@ func TestFlushDropsIncomplete(t *testing.T) {
 func TestFlushReportsLoss(t *testing.T) {
 	out := make(chan []ExtPacket, 10)
 	losses := 0
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out), WithPacketLossHandler(func() {
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out), WithPacketLossHandler(func(_, _ uint64) {
 		losses++
 	}))
 	s := newTestStream()
