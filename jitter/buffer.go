@@ -36,7 +36,7 @@ type Buffer struct {
 	latency      time.Duration
 	logger       logger.Logger
 	onPacket     PacketFunc
-	onPacketLoss func()
+	onPacketLoss PacketLossFunc
 
 	mu     sync.Mutex
 	closed core.Fuse
@@ -65,6 +65,10 @@ type BufferStats struct {
 }
 
 type PacketFunc func(packets []ExtPacket)
+
+// PacketLossFunc is called when packet loss or drops are detected.
+// packetsLost and packetsDropped represent the number of packets lost and dropped up to the point of the call.
+type PacketLossFunc func(packetsLost, packetsDropped uint64)
 
 func NewBuffer(
 	depacketizer rtp.Depacketizer,
@@ -106,7 +110,7 @@ func WithLogger(logger logger.Logger) Option {
 	}
 }
 
-func WithPacketLossHandler(handler func()) Option {
+func WithPacketLossHandler(handler PacketLossFunc) Option {
 	return func(b *Buffer) {
 		b.onPacketLoss = handler
 	}
@@ -202,7 +206,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		if !pkt.Padding {
 			b.stats.PacketsDropped++
 			if b.onPacketLoss != nil {
-				b.onPacketLoss()
+				b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 			}
 		}
 		return
@@ -302,7 +306,7 @@ func (b *Buffer) popReady() {
 	}
 
 	if loss && b.onPacketLoss != nil {
-		b.onPacketLoss()
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 	}
 
 	if b.head != nil {
@@ -315,7 +319,7 @@ func (b *Buffer) dropIncompleteExpired(expiry time.Time) {
 	dropped := b.dropIncomplete(expiry, false)
 
 	if dropped && b.onPacketLoss != nil {
-		b.onPacketLoss()
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 	}
 }
 
@@ -366,7 +370,7 @@ func (b *Buffer) Flush() {
 	}
 
 	if (loss || dropped) && b.onPacketLoss != nil {
-		b.onPacketLoss()
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 	}
 }
 
