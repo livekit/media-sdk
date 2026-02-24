@@ -73,48 +73,57 @@ func TestDTMF(t *testing.T) {
 	}
 }
 
-func TestDecodeRTPEndBit(t *testing.T) {
+func TestDecodeRTPCombined(t *testing.T) {
 	// star end: event=10, end=true, volume=10, dur=2080
 	endPayload, _ := hex.DecodeString("0a8a0820")
 	// four: event=4, end=false, volume=10, dur=320
 	noEndPayload, _ := hex.DecodeString("040a0140")
 
-	t.Run("end bit set, no marker", func(t *testing.T) {
+	t.Run("end bit set, no marker - should accept", func(t *testing.T) {
 		h := &rtp.Header{Marker: false, SequenceNumber: 1, Timestamp: 100}
-		ev, ok := DecodeRTPEndBit(h, endPayload)
+		ev, ok := DecodeRTPCombined(h, endPayload)
 		require.True(t, ok)
 		require.Equal(t, byte('*'), ev.Digit)
 		require.Equal(t, byte(10), ev.Code)
 		require.True(t, ev.End)
 	})
 
-	t.Run("end bit set, with marker", func(t *testing.T) {
+	t.Run("marker set, no end bit - should accept", func(t *testing.T) {
 		h := &rtp.Header{Marker: true, SequenceNumber: 2, Timestamp: 200}
-		ev, ok := DecodeRTPEndBit(h, endPayload)
+		ev, ok := DecodeRTPCombined(h, noEndPayload)
+		require.True(t, ok)
+		require.Equal(t, byte('4'), ev.Digit)
+		require.Equal(t, byte(4), ev.Code)
+		require.False(t, ev.End)
+	})
+
+	t.Run("both end bit and marker set - should accept", func(t *testing.T) {
+		h := &rtp.Header{Marker: true, SequenceNumber: 3, Timestamp: 300}
+		ev, ok := DecodeRTPCombined(h, endPayload)
 		require.True(t, ok)
 		require.Equal(t, byte('*'), ev.Digit)
 		require.True(t, ev.End)
 	})
 
-	t.Run("end bit not set", func(t *testing.T) {
-		h := &rtp.Header{Marker: true, SequenceNumber: 3, Timestamp: 300}
-		_, ok := DecodeRTPEndBit(h, noEndPayload)
+	t.Run("neither end bit nor marker - should reject", func(t *testing.T) {
+		h := &rtp.Header{Marker: false, SequenceNumber: 4, Timestamp: 400}
+		_, ok := DecodeRTPCombined(h, noEndPayload)
 		require.False(t, ok)
 	})
 
-	t.Run("short payload", func(t *testing.T) {
-		h := &rtp.Header{Marker: false, SequenceNumber: 4, Timestamp: 400}
-		_, ok := DecodeRTPEndBit(h, []byte{0x01})
+	t.Run("short payload - should reject", func(t *testing.T) {
+		h := &rtp.Header{Marker: false, SequenceNumber: 5, Timestamp: 500}
+		_, ok := DecodeRTPCombined(h, []byte{0x01})
 		require.False(t, ok)
 	})
 
 	t.Run("compare with DecodeRTP - no marker", func(t *testing.T) {
-		h := &rtp.Header{Marker: false, SequenceNumber: 5, Timestamp: 500}
+		h := &rtp.Header{Marker: false, SequenceNumber: 6, Timestamp: 600}
 		// DecodeRTP should reject (no marker)
 		_, ok := DecodeRTP(h, endPayload)
 		require.False(t, ok)
-		// DecodeRTPEndBit should accept (end bit is set)
-		ev, ok := DecodeRTPEndBit(h, endPayload)
+		// DecodeRTPCombined should accept (end bit is set)
+		ev, ok := DecodeRTPCombined(h, endPayload)
 		require.True(t, ok)
 		require.Equal(t, byte('*'), ev.Digit)
 	})
