@@ -172,16 +172,18 @@ func DecodeRTP(h *rtp.Header, payload []byte) (Event, bool) {
 	return ev, true
 }
 
-// DecodeRTPEndBit decodes a DTMF event from an RTP packet using the end bit
-// instead of the marker bit to determine event completion.
-// This is useful for SIP providers that do not set the marker bit on DTMF packets.
-// See RFC 4733 §2.3.1.
-func DecodeRTPEndBit(h *rtp.Header, payload []byte) (Event, bool) {
+// DecodeRTPCombined decodes a DTMF event from an RTP packet using both
+// the Marker bit and the End bit to determine event completion.
+// It returns a valid event if either the Marker bit is set on the RTP header
+// or the End bit is set in the DTMF payload.
+// This combines the logic of DecodeRTP and DecodeRTPEndBit to handle
+// SIP providers regardless of whether they set the Marker bit or not.
+func DecodeRTPCombined(h *rtp.Header, payload []byte) (Event, bool) {
 	ev, err := Decode(payload)
 	if err != nil {
 		return Event{}, false
 	}
-	if !ev.End {
+	if !ev.End && !h.Marker {
 		return Event{}, false
 	}
 	return ev, true
