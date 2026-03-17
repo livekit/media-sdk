@@ -327,11 +327,11 @@ func (d *Answer) Apply(offer *Offer, enc Encryption) (*MediaConfig, error) {
 }
 
 // Applies the answer to the offer and returns the negotiated MediaConfig and the offerer's local SDP bytes.
-func (d *Answer) ApplyWithLocal(offer *Offer, enc Encryption) (*MediaConfig, []byte, error) {
+func (d *Answer) ApplyWithLocal(offer *Offer, enc Encryption) (*MediaConfig, *sdp.SessionDescription, error) {
 	return d.apply(offer, enc, true)
 }
 
-func (d *Answer) apply(offer *Offer, enc Encryption, generateLocalSDP bool) (*MediaConfig, []byte, error) {
+func (d *Answer) apply(offer *Offer, enc Encryption, generateLocalSDP bool) (*MediaConfig, *sdp.SessionDescription, error) {
 	audio, err := SelectAudio(d.MediaDesc, true)
 	if err != nil {
 		return nil, nil, err
@@ -365,7 +365,7 @@ func (d *Answer) apply(offer *Offer, enc Encryption, generateLocalSDP bool) (*Me
 }
 
 // buildLocalSDP produces the offerer's local SDP (negotiated view, our connection).
-func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, sprof *srtp.Profile) ([]byte, error) {
+func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, sprof *srtp.Profile) (*sdp.SessionDescription, error) {
 	if sessionID == 0 {
 		sessionID = rand.Uint64()
 	}
@@ -393,7 +393,7 @@ func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, s
 		},
 		MediaDescriptions: []*sdp.MediaDescription{mediaDesc},
 	}
-	return s.Marshal()
+	return s, nil
 }
 
 func Parse(data []byte) (*Description, error) {
