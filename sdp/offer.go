@@ -322,26 +322,78 @@ func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption)
 }
 
 func (d *Answer) Apply(offer *Offer, enc Encryption) (*MediaConfig, error) {
+	mc, _, err := d.apply(offer, enc, false)
+	return mc, err
+}
+
+// Applies the answer to the offer and returns the negotiated MediaConfig and the offerer's local SDP bytes.
+func (d *Answer) ApplyWithLocal(offer *Offer, enc Encryption) (*MediaConfig, *sdp.SessionDescription, error) {
+	return d.apply(offer, enc, true)
+}
+
+func (d *Answer) apply(offer *Offer, enc Encryption, generateLocalSDP bool) (*MediaConfig, *sdp.SessionDescription, error) {
 	audio, err := SelectAudio(d.MediaDesc, true)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var sconf *srtp.Config
+	var sprof *srtp.Profile
 	if len(d.CryptoProfiles) != 0 && enc != EncryptionNone {
-		sconf, _, err = SelectCrypto(offer.CryptoProfiles, d.CryptoProfiles, false)
+		sconf, sprof, err = SelectCrypto(offer.CryptoProfiles, d.CryptoProfiles, false)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if sconf == nil && enc == EncryptionRequire {
-		return nil, ErrNoCommonCrypto
+		return nil, nil, ErrNoCommonCrypto
 	}
-	return &MediaConfig{
+	mc := &MediaConfig{
 		Local:  offer.Addr,
 		Remote: d.Addr,
 		Audio:  *audio,
 		Crypto: sconf,
-	}, nil
+	}
+
+	if !generateLocalSDP {
+		return mc, nil, nil
+	}
+	localSDP, err := buildLocalSDP(offer.SDP.Origin.SessionID, offer.Addr, audio, sprof)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mc, localSDP, nil
+}
+
+// buildLocalSDP produces the offerer's local SDP (negotiated view, our connection).
+func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, sprof *srtp.Profile) (*sdp.SessionDescription, error) {
+	if sessionID == 0 {
+		sessionID = rand.Uint64()
+	}
+	addrStr := local.Addr().String()
+	portVal := int(local.Port())
+	mediaDesc := AnswerMedia(portVal, audio, sprof)
+	s := &sdp.SessionDescription{
+		Version: 0,
+		Origin: sdp.Origin{
+			Username:       "-",
+			SessionID:      sessionID,
+			SessionVersion: sessionID + 4,
+			NetworkType:    "IN",
+			AddressType:    "IP4",
+			UnicastAddress: addrStr,
+		},
+		SessionName: "LiveKit",
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address:     &sdp.Address{Address: addrStr},
+		},
+		TimeDescriptions: []sdp.TimeDescription{
+			{Timing: sdp.Timing{StartTime: 0, StopTime: 0}},
+		},
+		MediaDescriptions: []*sdp.MediaDescription{mediaDesc},
+	}
+	return s, nil
 }
 
 func Parse(data []byte) (*Description, error) {
@@ -560,6 +612,7 @@ func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
 	return &out, nil
 }
 
+// MediaConfig is the canonical representation of the negotiated session.
 type MediaConfig struct {
 	Local  netip.AddrPort
 	Remote netip.AddrPort
