@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
+	"sync"
 
 	prtp "github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
@@ -118,6 +119,9 @@ func NewSession(log logger.Logger, conn net.Conn, conf *Config) (rtp.Session, er
 type session struct {
 	log logger.Logger
 	s   *srtp.SessionSRTP
+
+	mu      sync.Mutex
+	streams []*srtp.ReadStreamSRTP
 }
 
 func (s *session) OpenWriteStream() (rtp.WriteStream, error) {
@@ -133,11 +137,24 @@ func (s *session) AcceptStream() (rtp.ReadStream, uint32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	s.mu.Lock()
+	// pion/srtp does not close individual streams, keep track of them
+	s.streams = append(s.streams, r)
+	s.mu.Unlock()
 	return readStream{r: r}, ssrc, nil
 }
 
 func (s *session) Close() error {
-	return s.s.Close()
+	err := s.s.Close() // Stop packets first
+
+	s.mu.Lock()
+	streams := s.streams
+	s.streams = nil
+	s.mu.Unlock()
+	for _, r := range streams {
+		_ = r.Close()
+	}
+	return err
 }
 
 type writeStream struct {
