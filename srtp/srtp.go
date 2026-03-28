@@ -137,7 +137,7 @@ func (s *session) AcceptStream() (rtp.ReadStream, uint32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	s.mu.Lock()
+	s.mu.Lock() // TODO: move before accepting stream
 	// pion/srtp does not close individual streams, keep track of them
 	s.streams = append(s.streams, r)
 	s.mu.Unlock()
