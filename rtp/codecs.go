@@ -119,3 +119,11 @@ func (c *audioCodec[S]) DecodeRTP(w media.Writer[media.PCM16Sample], typ byte) H
 	}
 	return NewMediaStreamIn(s)
 }
+
+func (c *audioCodec[S]) GetEncoder(w media.WriteCloser[S]) media.PCM16Writer {
+	return c.encode(w)
+}
+
+func (c *audioCodec[S]) GetDecoder(w media.WriteCloser[media.PCM16Sample]) media.WriteCloser[S] {
+	return c.decode(w)
+}
