@@ -16,7 +16,6 @@ package g711
 
 import (
 	"fmt"
-	"io"
 
 	prtp "github.com/pion/rtp"
 
@@ -37,33 +36,7 @@ func init() {
 	}, DecodeALaw, EncodeALaw))
 }
 
-type ALawSample []byte
-
-func (s ALawSample) Size() int {
-	return len(s)
-}
-
-func (s ALawSample) CopyTo(dst []byte) (int, error) {
-	if len(dst) < len(s) {
-		return 0, io.ErrShortBuffer
-	}
-	n := copy(dst, s)
-	return n, nil
-}
-
-func (s ALawSample) Decode() media.PCM16Sample {
-	out := make(media.PCM16Sample, len(s))
-	DecodeALawTo(out, s)
-	return out
-}
-
-func (s *ALawSample) Encode(data media.PCM16Sample) {
-	out := make(ALawSample, len(data))
-	EncodeALawTo(out, data)
-	*s = out
-}
-
-type ALawWriter = media.WriteCloser[ALawSample]
+type ALawWriter = media.WriteCloser[[]byte]
 
 type ALawDecoder struct {
 	w   media.PCM16Writer
@@ -82,7 +55,7 @@ func (d *ALawDecoder) Close() error {
 	return d.w.Close()
 }
 
-func (d *ALawDecoder) WriteSample(in ALawSample) error {
+func (d *ALawDecoder) WriteSample(in []byte) error {
 	if len(in) >= cap(d.buf) {
 		d.buf = make(media.PCM16Sample, len(in))
 	} else {
@@ -103,7 +76,7 @@ func DecodeALaw(w media.PCM16Writer) ALawWriter {
 
 type ALawEncoder struct {
 	w   ALawWriter
-	buf ALawSample
+	buf []byte
 }
 
 func (e *ALawEncoder) String() string {
@@ -120,7 +93,7 @@ func (e *ALawEncoder) Close() error {
 
 func (e *ALawEncoder) WriteSample(in media.PCM16Sample) error {
 	if len(in) >= cap(e.buf) {
-		e.buf = make(ALawSample, len(in))
+		e.buf = make([]byte, len(in))
 	} else {
 		e.buf = e.buf[:len(in)]
 	}
