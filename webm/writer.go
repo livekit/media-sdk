@@ -30,7 +30,7 @@ func NewPCM16Writer(w io.WriteCloser, sampleRate int, channels int, sampleDur ti
 	return NewWriter[media.PCM16Sample](w, "A_PCM/INT/LIT", channels, sampleRate, sampleDur)
 }
 
-func NewWriter[T media.Frame](w io.WriteCloser, codec string, channels, sampleRate int, sampleDur time.Duration) media.WriteCloser[T] {
+func NewWriter[T any](w io.WriteCloser, codec string, channels, sampleRate int, sampleDur time.Duration) media.WriteCloser[T] {
 	ws, err := webm.NewSimpleBlockWriter(w, []webm.TrackEntry{
 		{
 			Name:            "Audio",
@@ -51,7 +51,7 @@ func NewWriter[T media.Frame](w io.WriteCloser, codec string, channels, sampleRa
 	return &writer[T]{codec: codec, ws: ws[0], channels: channels, sampleRate: sampleRate, dur: sampleDur}
 }
 
-type writer[T media.Frame] struct {
+type writer[T any] struct {
 	codec      string
 	ws         webm.BlockWriteCloser
 	channels   int
@@ -70,16 +70,25 @@ func (w *writer[T]) SampleRate() int {
 }
 
 func (w *writer[T]) WriteSample(sample T) error {
-	if sz := sample.Size(); cap(w.buf) < sz {
-		w.buf = make([]byte, sz)
-	} else {
-		w.buf = w.buf[:sz]
+	var data []byte
+	switch v := any(sample).(type) {
+	case []byte:
+		data = slices.Clone(v)
+	case media.Frame:
+		if sz := v.Size(); cap(w.buf) < sz {
+			w.buf = make([]byte, sz)
+		} else {
+			w.buf = w.buf[:sz]
+		}
+		n, err := v.CopyTo(w.buf)
+		if err != nil {
+			return err
+		}
+		data = slices.Clone(w.buf[:n])
+	default:
+		return fmt.Errorf("webm writer: unsupported sample type %T", sample)
 	}
-	n, err := sample.CopyTo(w.buf)
-	if err != nil {
-		return err
-	}
-	_, err = w.ws.Write(true, w.ts, slices.Clone(w.buf[:n]))
+	_, err := w.ws.Write(true, w.ts, data)
 	w.ts += w.dur.Milliseconds()
 	return err
 }
