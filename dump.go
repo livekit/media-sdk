@@ -23,7 +23,7 @@ func DumpWriterPCM16(name string, w PCM16Writer) PCM16Writer {
 	return DumpWriter[PCM16Sample]("s16le", name, w)
 }
 
-func DumpWriter[T any](ext string, name string, w WriteCloser[T]) WriteCloser[T] {
+func DumpWriter[T Frame](ext string, name string, w WriteCloser[T]) WriteCloser[T] {
 	rate := w.SampleRate()
 	nameOut := fmt.Sprintf("%s_ar%d.%s", name, rate, ext)
 	f, err := os.Create(nameOut)

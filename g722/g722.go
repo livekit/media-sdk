@@ -16,6 +16,7 @@ package g722
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync/atomic"
 
@@ -45,6 +46,20 @@ func init() {
 	}, Decode, Encode))
 }
 
+type Sample []byte
+
+func (s Sample) Size() int {
+	return len(s)
+}
+
+func (s Sample) CopyTo(dst []byte) (int, error) {
+	if len(dst) < len(s) {
+		return 0, io.ErrShortBuffer
+	}
+	n := copy(dst, s)
+	return n, nil
+}
+
 func decodeSize(flags g722.Flags, g722Len int) int {
 	mul := 2
 	if flags&g722.FlagSampleRate8000 != 0 {
@@ -65,7 +80,7 @@ func encodeSize(flags g722.Flags, pcmLen int) int {
 	return n
 }
 
-type Writer = media.WriteCloser[[]byte]
+type Writer = media.WriteCloser[Sample]
 
 type Decoder struct {
 	f   g722.Flags
@@ -86,7 +101,7 @@ func (d *Decoder) Close() error {
 	return d.w.Close()
 }
 
-func (d *Decoder) WriteSample(in []byte) error {
+func (d *Decoder) WriteSample(in Sample) error {
 	sz := decodeSize(d.f, len(in))
 	if cap(d.buf) < sz {
 		d.buf = make([]int16, sz)
@@ -111,7 +126,7 @@ func Decode(w media.PCM16Writer) (w2 Writer) {
 		pref := fmt.Sprintf("sip_g722_dec_%d", id)
 		w = media.DumpWriterPCM16(pref+"_out", w)
 		defer func() {
-			w2 = media.DumpWriter[[]byte]("g722", pref+"_in", w2)
+			w2 = media.DumpWriter[Sample]("g722", pref+"_in", w2)
 		}()
 	}
 	return &Decoder{w: w, f: f, d: g722.NewDecoder(g722.Rate64000, f)}
@@ -120,7 +135,7 @@ func Decode(w media.PCM16Writer) (w2 Writer) {
 type Encoder struct {
 	f   g722.Flags
 	e   *g722.Encoder
-	buf []byte
+	buf Sample
 	w   Writer
 }
 
@@ -139,7 +154,7 @@ func (e *Encoder) Close() error {
 func (e *Encoder) WriteSample(in media.PCM16Sample) error {
 	sz := encodeSize(e.f, len(in))
 	if cap(e.buf) < sz {
-		e.buf = make([]byte, sz)
+		e.buf = make(Sample, sz)
 	}
 	n := e.e.Encode(e.buf, in)
 	return e.w.WriteSample(e.buf[:n])
@@ -158,7 +173,7 @@ func Encode(w Writer) (w2 media.PCM16Writer) {
 	if dumpToFile {
 		id := g722ID.Add(1)
 		pref := fmt.Sprintf("sip_g722_enc_%d", id)
-		w = media.DumpWriter[[]byte]("g722", pref+"_out", w)
+		w = media.DumpWriter[Sample]("g722", pref+"_out", w)
 		defer func() {
 			w2 = media.DumpWriterPCM16(pref+"_in", w2)
 		}()
