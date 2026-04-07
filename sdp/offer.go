@@ -580,7 +580,7 @@ func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
 				out.DTMFType = byte(typ)
 				continue
 			}
-			codec, _ := CodecByName(name).(rtp.AudioCodec)
+			codec, _ := CodecByName(name).(media.AudioCodec)
 			out.Codecs = append(out.Codecs, CodecInfo{
 				Type:  byte(typ),
 				Codec: codec,
@@ -600,7 +600,7 @@ func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
 		if err != nil {
 			continue
 		}
-		codec, _ := rtp.CodecByPayloadType(byte(typ)).(rtp.AudioCodec)
+		codec, _ := rtp.CodecByPayloadType(byte(typ)).(media.AudioCodec)
 		if !media.CodecEnabled(codec) {
 			codec = nil
 		}
@@ -621,7 +621,7 @@ type MediaConfig struct {
 }
 
 type AudioConfig struct {
-	Codec    rtp.AudioCodec
+	Codec    media.AudioCodec
 	Type     byte
 	DTMFType byte
 }
@@ -629,11 +629,11 @@ type AudioConfig struct {
 func SelectAudio(desc MediaDesc, answer bool) (*AudioConfig, error) {
 	var (
 		priority   int
-		audioCodec rtp.AudioCodec
+		audioCodec media.AudioCodec
 		audioType  byte
 	)
 	for _, c := range desc.Codecs {
-		codec, ok := c.Codec.(rtp.AudioCodec)
+		codec, ok := c.Codec.(media.AudioCodec)
 		if !ok {
 			continue
 		}

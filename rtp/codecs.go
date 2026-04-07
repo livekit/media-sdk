@@ -16,15 +16,9 @@ package rtp
 
 import (
 	"fmt"
-	"os"
-	"sync/atomic"
 
 	"github.com/livekit/media-sdk"
-)
-
-var (
-	mediaID         atomic.Uint32
-	mediaDumpToFile = os.Getenv("LK_DUMP_MEDIA") == "true"
+	"github.com/pion/rtp"
 )
 
 var (
@@ -44,78 +38,40 @@ func CodecByPayloadType(typ byte) media.Codec {
 	return codecByType[typ]
 }
 
-type AudioCodec interface {
-	media.Codec
-	EncodeRTP(w *Stream) media.PCM16Writer
-	DecodeRTP(w media.Writer[media.PCM16Sample], typ byte) Handler
+func HandlePayload(w media.BytesWriter, typ byte) HandlerCloser {
+	return &rawHandler{w: w, typ: typ}
 }
 
-type AudioEncoder[S BytesFrame] interface {
-	AudioCodec
-	Decode(writer media.PCM16Writer) media.WriteCloser[S]
-	Encode(writer media.WriteCloser[S]) media.PCM16Writer
+type rawHandler struct {
+	w   media.BytesWriter
+	typ byte
 }
 
-func NewAudioCodec[S BytesFrame](
-	info media.CodecInfo,
-	decode func(writer media.PCM16Writer) media.WriteCloser[S],
-	encode func(writer media.WriteCloser[S]) media.PCM16Writer,
-) AudioCodec {
-	if info.SampleRate <= 0 {
-		panic("invalid sample rate")
-	}
-	if info.RTPClockRate == 0 {
-		info.RTPClockRate = info.SampleRate
-	}
-	return &audioCodec[S]{
-		info:   info,
-		encode: encode,
-		decode: decode,
-	}
+func (d *rawHandler) String() string {
+	return fmt.Sprintf("RTP(%d) -> %s", int(d.typ), d.w.String())
 }
 
-type audioCodec[S BytesFrame] struct {
-	info   media.CodecInfo
-	decode func(writer media.PCM16Writer) media.WriteCloser[S]
-	encode func(writer media.WriteCloser[S]) media.PCM16Writer
+func (d *rawHandler) Close() {
+	d.w.Close()
 }
 
-func (c *audioCodec[S]) Info() media.CodecInfo {
-	return c.info
+func (d *rawHandler) HandleRTP(h *rtp.Header, payload []byte) error {
+	return d.w.WriteRaw(payload)
 }
 
-func (c *audioCodec[S]) Decode(w media.PCM16Writer) media.WriteCloser[S] {
-	return c.decode(w)
+func DecodePCM(w media.PCM16Writer, c media.AudioCodec, typ byte) HandlerCloser {
+	return HandlePayload(c.DecodeBytes(w), typ)
 }
 
-func (c *audioCodec[S]) Encode(w media.WriteCloser[S]) media.PCM16Writer {
-	return c.encode(w)
+func EncodePCM(w *Stream, c media.AudioCodec) media.PCM16Writer {
+	return c.EncodeBytes(w)
 }
 
-func (c *audioCodec[S]) EncodeRTP(w *Stream) media.PCM16Writer {
-	var s media.WriteCloser[S] = NewMediaStreamOut[S](w, c.info.SampleRate)
-	if mediaDumpToFile {
-		id := mediaID.Add(1)
-		name := fmt.Sprintf("sip_rtp_out_%d", id)
-		ext := c.info.FileExt
-		if ext == "" {
-			ext = "raw"
-		}
-		s = media.DumpWriter[S](ext, name, media.NopCloser(s))
-	}
-	return c.encode(s)
+func HandleAudio[S BytesFrame](w media.WriteCloser[S], c media.AudioFrameCodec[S], typ byte) HandlerCloser {
+	bw := media.DecodeBytes(w)
+	return HandlePayload(bw, typ)
 }
 
-func (c *audioCodec[S]) DecodeRTP(w media.Writer[media.PCM16Sample], typ byte) Handler {
-	s := c.decode(media.NopCloser(w))
-	if mediaDumpToFile {
-		id := mediaID.Add(1)
-		name := fmt.Sprintf("sip_rtp_in_%d", id)
-		ext := c.info.FileExt
-		if ext == "" {
-			ext = "raw"
-		}
-		s = media.DumpWriter[S](ext, name, media.NopCloser(s))
-	}
-	return NewMediaStreamIn(s)
+func WriteAudio[S BytesFrame](w *Stream, c media.AudioFrameCodec[S]) media.WriteCloser[S] {
+	return media.EncodeBytes[S](w, c.Info().SampleRate)
 }

@@ -117,8 +117,8 @@ func TestSDPMediaOffer(t *testing.T) {
 	}, offer)
 }
 
-func getCodec(name string) rtp.AudioCodec {
-	return CodecByName(name).(rtp.AudioCodec)
+func getCodec(name string) media.AudioCodec {
+	return CodecByName(name).(media.AudioCodec)
 }
 
 func TestSDPMediaAnswer(t *testing.T) {

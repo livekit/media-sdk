@@ -24,7 +24,6 @@ import (
 	prtp "github.com/pion/rtp"
 
 	"github.com/livekit/media-sdk"
-	"github.com/livekit/media-sdk/rtp"
 )
 
 const SDPName = "G722/8000"
@@ -35,7 +34,7 @@ var (
 )
 
 func init() {
-	media.RegisterCodec(rtp.NewAudioCodec(media.CodecInfo{
+	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
 		SDPName:      SDPName,
 		SampleRate:   16000,
 		RTPClockRate: 8000,
