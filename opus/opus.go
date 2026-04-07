@@ -35,7 +35,21 @@ import (
 */
 import "C"
 
-type Writer = media.WriteCloser[[]byte]
+type Sample []byte
+
+func (s Sample) Size() int {
+	return len(s)
+}
+
+func (s Sample) CopyTo(dst []byte) (int, error) {
+	if len(dst) < len(s) {
+		return 0, io.ErrShortBuffer
+	}
+	n := copy(dst, s)
+	return n, nil
+}
+
+type Writer = media.WriteCloser[Sample]
 
 func Decode(w media.PCM16Writer, targetChannels int, logger logger.Logger) (Writer, error) {
 	if targetChannels != 1 && targetChannels != 2 {
@@ -84,7 +98,7 @@ func (d *decoder) SampleRate() int {
 	return d.w.SampleRate()
 }
 
-func (d *decoder) WriteSample(in []byte) error {
+func (d *decoder) WriteSample(in Sample) error {
 	if len(in) == 0 {
 		return nil
 	}
@@ -125,7 +139,7 @@ func (d *decoder) WriteSample(in []byte) error {
 	return d.w.WriteSample(returnData)
 }
 
-func (d *decoder) resetForSample(in []byte) (int, error) {
+func (d *decoder) resetForSample(in Sample) (int, error) {
 	channels := int(C.opus_packet_get_nb_channels((*C.uchar)(&in[0])))
 
 	if d.dec == nil || d.lastChannels != channels {
@@ -150,7 +164,7 @@ func (d *decoder) Close() error {
 type encoder struct {
 	w      Writer
 	enc    *opus.Encoder
-	buf    []byte
+	buf    Sample
 	logger logger.Logger
 }
 
@@ -174,6 +188,6 @@ func (e *encoder) Close() error {
 	return e.w.Close()
 }
 
-func NewWebmWriter(w io.WriteCloser, sampleRate int, channels int, sampleDur time.Duration) media.WriteCloser[[]byte] {
-	return webm.NewWriter[[]byte](w, "A_OPUS", channels, sampleRate, sampleDur)
+func NewWebmWriter(w io.WriteCloser, sampleRate int, channels int, sampleDur time.Duration) media.WriteCloser[Sample] {
+	return webm.NewWriter[Sample](w, "A_OPUS", channels, sampleRate, sampleDur)
 }

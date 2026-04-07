@@ -210,7 +210,7 @@ func (s MultiWriter[T]) Close() error {
 	return last
 }
 
-func NewFileWriter[T any](w io.WriteCloser, sampleRate int) WriteCloser[T] {
+func NewFileWriter[T Frame](w io.WriteCloser, sampleRate int) WriteCloser[T] {
 	return &fileWriter[T]{
 		w:          w,
 		bw:         bufio.NewWriter(w),
@@ -218,7 +218,7 @@ func NewFileWriter[T any](w io.WriteCloser, sampleRate int) WriteCloser[T] {
 	}
 }
 
-type fileWriter[T any] struct {
+type fileWriter[T Frame] struct {
 	w          io.WriteCloser
 	bw         *bufio.Writer
 	sampleRate int
@@ -234,25 +234,16 @@ func (w *fileWriter[T]) SampleRate() int {
 }
 
 func (w *fileWriter[T]) WriteSample(sample T) error {
-	var data []byte
-	switch v := any(sample).(type) {
-	case []byte:
-		data = v
-	case Frame:
-		if sz := v.Size(); cap(w.buf) < sz {
-			w.buf = make([]byte, sz)
-		} else {
-			w.buf = w.buf[:sz]
-		}
-		n, err := v.CopyTo(w.buf)
-		if err != nil {
-			return err
-		}
-		data = w.buf[:n]
-	default:
-		return fmt.Errorf("fileWriter: unsupported sample type %T", sample)
+	if sz := sample.Size(); cap(w.buf) < sz {
+		w.buf = make([]byte, sz)
+	} else {
+		w.buf = w.buf[:sz]
 	}
-	_, err := w.bw.Write(data)
+	n, err := sample.CopyTo(w.buf)
+	if err != nil {
+		return err
+	}
+	_, err = w.bw.Write(w.buf[:n])
 	return err
 }
 

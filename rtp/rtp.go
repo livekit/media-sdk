@@ -29,6 +29,10 @@ import (
 
 const rtpStreamTSResetFrames = 25 // 500ms @ ptime=20ms
 
+type BytesFrame interface {
+	~[]byte
+	media.Frame
+}
 
 type Writer interface {
 	String() string
@@ -252,43 +256,43 @@ func (s *Stream) GetCurrentTimestamp() uint32 {
 	return s.ev.Timestamp
 }
 
-func NewMediaStreamOut(s *Stream, sampleRate int) *MediaStreamOut {
-	return &MediaStreamOut{s: s, sampleRate: sampleRate}
+func NewMediaStreamOut[T BytesFrame](s *Stream, sampleRate int) *MediaStreamOut[T] {
+	return &MediaStreamOut[T]{s: s, sampleRate: sampleRate}
 }
 
-type MediaStreamOut struct {
+type MediaStreamOut[T BytesFrame] struct {
 	s          *Stream
 	sampleRate int
 }
 
-func (s *MediaStreamOut) String() string {
+func (s *MediaStreamOut[T]) String() string {
 	return fmt.Sprintf("RTP(%d)", s.sampleRate)
 }
 
-func (s *MediaStreamOut) SampleRate() int {
+func (s *MediaStreamOut[T]) SampleRate() int {
 	return s.sampleRate
 }
 
-func (s *MediaStreamOut) Close() error {
+func (s *MediaStreamOut[T]) Close() error {
 	return nil
 }
 
-func (s *MediaStreamOut) WriteSample(sample []byte) error {
-	return s.s.WritePayload(sample, false)
+func (s *MediaStreamOut[T]) WriteSample(sample T) error {
+	return s.s.WritePayload([]byte(sample), false)
 }
 
-func NewMediaStreamIn(w media.Writer[[]byte]) *MediaStreamIn {
-	return &MediaStreamIn{Writer: w}
+func NewMediaStreamIn[T BytesFrame](w media.Writer[T]) *MediaStreamIn[T] {
+	return &MediaStreamIn[T]{Writer: w}
 }
 
-type MediaStreamIn struct {
-	Writer media.Writer[[]byte]
+type MediaStreamIn[T BytesFrame] struct {
+	Writer media.Writer[T]
 }
 
-func (s *MediaStreamIn) String() string {
+func (s *MediaStreamIn[T]) String() string {
 	return fmt.Sprintf("RTP(%d) -> %s", s.Writer.SampleRate(), s.Writer)
 }
 
-func (s *MediaStreamIn) HandleRTP(_ *rtp.Header, payload []byte) error {
-	return s.Writer.WriteSample(payload)
+func (s *MediaStreamIn[T]) HandleRTP(_ *rtp.Header, payload []byte) error {
+	return s.Writer.WriteSample(T(payload))
 }
