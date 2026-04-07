@@ -30,8 +30,7 @@ import (
 const rtpStreamTSResetFrames = 25 // 500ms @ ptime=20ms
 
 type BytesFrame interface {
-	~[]byte
-	media.Frame
+	media.BytesFrame
 }
 
 type Writer interface {
@@ -184,12 +183,26 @@ func (s *SeqWriter) NewStreamWithDur(typ byte, packetDur uint32) *Stream {
 	return st
 }
 
+var _ media.BytesWriter = (*Stream)(nil)
+
 type Stream struct {
 	s         *SeqWriter
 	packetDur uint32
 	mu        sync.Mutex
 	ev        Event
 	followup  bool
+}
+
+func (s *Stream) String() string {
+	return s.s.String()
+}
+
+func (s *Stream) Close() error {
+	return nil
+}
+
+func (s *Stream) WriteRaw(data []byte) error {
+	return s.WritePayload(data, false)
 }
 
 func (s *Stream) writePayload(inc bool, data []byte, marker bool) error {

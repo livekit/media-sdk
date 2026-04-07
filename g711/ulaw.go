@@ -21,13 +21,12 @@ import (
 	prtp "github.com/pion/rtp"
 
 	"github.com/livekit/media-sdk"
-	"github.com/livekit/media-sdk/rtp"
 )
 
 const ULawSDPName = "PCMU/8000"
 
 func init() {
-	media.RegisterCodec(rtp.NewAudioCodec(media.CodecInfo{
+	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
 		SDPName:     ULawSDPName,
 		SampleRate:  8000,
 		RTPDefType:  prtp.PayloadTypePCMU,

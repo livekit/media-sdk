@@ -91,6 +91,7 @@ func EnabledCodecs() []Codec {
 	return out
 }
 
+// RegisterCodec registers the codec.
 func RegisterCodec(c Codec) {
 	codecs = append(codecs, c)
 	if info := c.Info(); info.Disabled {
@@ -101,6 +102,7 @@ func RegisterCodec(c Codec) {
 	}
 }
 
+// NewCodec creates a generic codec definition without a specific implementation.
 func NewCodec(info CodecInfo) Codec {
 	if info.SampleRate <= 0 {
 		panic("invalid sample rate")

@@ -15,9 +15,7 @@
 package media
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -208,52 +206,4 @@ func (s MultiWriter[T]) Close() error {
 		}
 	}
 	return last
-}
-
-func NewFileWriter[T Frame](w io.WriteCloser, sampleRate int) WriteCloser[T] {
-	return &fileWriter[T]{
-		w:          w,
-		bw:         bufio.NewWriter(w),
-		sampleRate: sampleRate,
-	}
-}
-
-type fileWriter[T Frame] struct {
-	w          io.WriteCloser
-	bw         *bufio.Writer
-	sampleRate int
-	buf        []byte
-}
-
-func (w *fileWriter[T]) String() string {
-	return fmt.Sprintf("RawFile(%d)", w.sampleRate)
-}
-
-func (w *fileWriter[T]) SampleRate() int {
-	return w.sampleRate
-}
-
-func (w *fileWriter[T]) WriteSample(sample T) error {
-	if sz := sample.Size(); cap(w.buf) < sz {
-		w.buf = make([]byte, sz)
-	} else {
-		w.buf = w.buf[:sz]
-	}
-	n, err := sample.CopyTo(w.buf)
-	if err != nil {
-		return err
-	}
-	_, err = w.bw.Write(w.buf[:n])
-	return err
-}
-
-func (w *fileWriter[T]) Close() error {
-	if err := w.bw.Flush(); err != nil {
-		_ = w.w.Close()
-		return err
-	}
-	if err := w.w.Close(); err != nil {
-		return err
-	}
-	return nil
 }
