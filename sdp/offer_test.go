@@ -45,8 +45,10 @@ func getInline(s string) string {
 }
 
 func TestSDPMediaOffer(t *testing.T) {
+	g := media.GlobalCodecs()
+
 	const port = 12345
-	_, offer, err := OfferMedia(port, EncryptionNone)
+	_, offer, err := OfferMediaWith(g, port, EncryptionNone)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -66,7 +68,7 @@ func TestSDPMediaOffer(t *testing.T) {
 		},
 	}, offer)
 
-	_, offer, err = OfferMedia(port, EncryptionRequire)
+	_, offer, err = OfferMediaWith(g, port, EncryptionRequire)
 	require.NoError(t, err)
 	i := slices.IndexFunc(offer.Attributes, func(a sdp.Attribute) bool {
 		return a.Key == "crypto"
@@ -94,10 +96,10 @@ func TestSDPMediaOffer(t *testing.T) {
 		},
 	}, offer)
 
-	media.CodecSetEnabled(g722.SDPName, false)
-	defer media.CodecSetEnabled(g722.SDPName, true)
+	noG722 := g.NewSet()
+	noG722.SetEnabled(g722.SDPName, false)
 
-	_, offer, err = OfferMedia(port, EncryptionNone)
+	_, offer, err = OfferMediaWith(noG722, port, EncryptionNone)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -117,11 +119,12 @@ func TestSDPMediaOffer(t *testing.T) {
 	}, offer)
 }
 
-func getCodec(name string) media.AudioCodec {
-	return CodecByName(name).(media.AudioCodec)
+func getCodec(s *media.CodecSet, name string) media.AudioCodec {
+	return CodecByNameWith(s, name).(media.AudioCodec)
 }
 
 func TestSDPMediaAnswer(t *testing.T) {
+	g := media.GlobalCodecs()
 	const port = 12345
 	cases := []struct {
 		name  string
@@ -141,7 +144,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g722.SDPName),
+				Codec:    getCodec(g, g722.SDPName),
 				Type:     9,
 				DTMFType: 101,
 			},
@@ -159,7 +162,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g722.SDPName),
+				Codec:    getCodec(g, g722.SDPName),
 				Type:     9,
 				DTMFType: 101,
 			},
@@ -176,7 +179,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g722.SDPName),
+				Codec: getCodec(g, g722.SDPName),
 				Type:  9,
 			},
 		},
@@ -193,7 +196,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g722.SDPName),
+				Codec:    getCodec(g, g722.SDPName),
 				Type:     9,
 				DTMFType: 103,
 			},
@@ -210,7 +213,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g711.ULawSDPName),
+				Codec:    getCodec(g, g711.ULawSDPName),
 				Type:     0,
 				DTMFType: 101,
 			},
@@ -227,7 +230,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g722.SDPName),
+				Codec:    getCodec(g, g722.SDPName),
 				Type:     9,
 				DTMFType: 101,
 			},
@@ -256,7 +259,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g711.ULawSDPName),
+				Codec:    getCodec(g, g711.ULawSDPName),
 				Type:     0,
 				DTMFType: 101,
 			},
@@ -270,7 +273,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g711.ULawSDPName),
+				Codec:    getCodec(g, g711.ULawSDPName),
 				Type:     0,
 				DTMFType: 101,
 			},
@@ -287,7 +290,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g711.ULawSDPName),
+				Codec: getCodec(g, g711.ULawSDPName),
 				Type:  0,
 			},
 		},
@@ -303,7 +306,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g711.ALawSDPName),
+				Codec: getCodec(g, g711.ALawSDPName),
 				Type:  8,
 			},
 		},
@@ -311,7 +314,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			m, err := ParseMedia(&c.offer)
+			m, err := ParseMediaWith(g, &c.offer)
 			require.NoError(t, err)
 			got, err := SelectAudio(*m, true)
 			if c.exp == nil {
@@ -323,7 +326,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 			require.Equal(t, c.exp, got)
 		})
 	}
-	_, offer, err := OfferMedia(port, EncryptionNone)
+	_, offer, err := OfferMediaWith(g, port, EncryptionNone)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -345,6 +348,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 }
 
 func TestSDPMediaAnswerOneDisabled(t *testing.T) {
+	g := media.GlobalCodecs()
+
 	offer := sdp.MediaDescription{
 		MediaName: sdp.MediaName{
 			Formats: []string{"9", "0", "8", "101"},
@@ -356,15 +361,15 @@ func TestSDPMediaAnswerOneDisabled(t *testing.T) {
 		},
 	}
 	exp := &AudioConfig{
-		Codec:    getCodec(g711.ULawSDPName),
+		Codec:    getCodec(g, g711.ULawSDPName),
 		Type:     0,
 		DTMFType: 101,
 	}
 
-	media.CodecSetEnabled(g722.SDPName, false)
-	defer media.CodecSetEnabled(g722.SDPName, true)
+	noG722 := g.NewSet()
+	noG722.SetEnabled(g722.SDPName, false)
 
-	m, err := ParseMedia(&offer)
+	m, err := ParseMediaWith(noG722, &offer)
 	require.NoError(t, err)
 	got, err := SelectAudio(*m, false)
 	require.NoError(t, err)
@@ -373,6 +378,8 @@ func TestSDPMediaAnswerOneDisabled(t *testing.T) {
 }
 
 func TestSDPMediaAnswerAllDisabled(t *testing.T) {
+	g := media.GlobalCodecs()
+
 	offer := sdp.MediaDescription{
 		MediaName: sdp.MediaName{
 			Formats: []string{"9", "0", "101"},
@@ -384,12 +391,11 @@ func TestSDPMediaAnswerAllDisabled(t *testing.T) {
 		},
 	}
 
-	media.CodecSetEnabled(g722.SDPName, false)
-	defer media.CodecSetEnabled(g722.SDPName, true)
-	media.CodecSetEnabled(g711.ULawSDPName, false)
-	defer media.CodecSetEnabled(g711.ULawSDPName, true)
+	allOff := g.NewSet()
+	allOff.SetEnabled(g722.SDPName, false)
+	allOff.SetEnabled(g711.ULawSDPName, false)
 
-	m, err := ParseMedia(&offer)
+	m, err := ParseMediaWith(allOff, &offer)
 	require.NoError(t, err)
 	_, err = SelectAudio(*m, false)
 	require.Error(t, err)
@@ -397,6 +403,8 @@ func TestSDPMediaAnswerAllDisabled(t *testing.T) {
 }
 
 func TestParseOffer(t *testing.T) {
+	g := media.GlobalCodecs()
+
 	tests := []struct {
 		name    string
 		sdp     string
@@ -458,7 +466,7 @@ a=sendrecv
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := ParseOffer([]byte(test.sdp))
+			_, err := ParseOfferWith(g, []byte(test.sdp))
 			if test.wantErr {
 				require.Error(t, err)
 			} else {
@@ -469,6 +477,8 @@ a=sendrecv
 }
 
 func TestParseOfferSRTP(t *testing.T) {
+	g := media.GlobalCodecs()
+
 	vProfiles := []srtp.Profile{
 		{
 			Index:   1,
@@ -528,7 +538,7 @@ a=crypto:6 AEAD_AES_256_GCM inline:EFFzS2FMyNoYcVcaARU+nvk+JhHmVbvdFtRxZuRi9rDmL
 a=rtcp-fb:* trr-int 5000 
 a=rtcp-fb:* ccm tmmbr 
 `
-		v, err := ParseOffer([]byte(sdpData))
+		v, err := ParseOfferWith(g, []byte(sdpData))
 		require.NoError(t, err)
 		require.Equal(t, vProfiles, v.CryptoProfiles)
 	})
@@ -555,7 +565,7 @@ a=crypto:6 AEAD_AES_256_GCM inline:EFFzS2FMyNoYcVcaARU+nvk+JhHmVbvdFtRxZuRi9rDmL
 a=rtcp-fb:* trr-int 5000 
 a=rtcp-fb:* ccm tmmbr 
 `
-		v, err := ParseOffer([]byte(sdpData))
+		v, err := ParseOfferWith(g, []byte(sdpData))
 		require.NoError(t, err)
 		require.Equal(t, vProfiles, v.CryptoProfiles)
 	})
@@ -563,6 +573,8 @@ a=rtcp-fb:* ccm tmmbr
 
 // TestParseOfferLifetimeAndMKI verifies that lifetime and MKI are correctly parsed from an SDP offer
 func TestParseOfferLifetimeAndMKI(t *testing.T) {
+	g := media.GlobalCodecs()
+
 	// Create an SDP offer with lifetime and MKI in the crypto attribute
 	// Format: crypto:tag crypto-suite inline:base64-key-salt|lifetime|value:length
 	// lifetime: 2^48 (281474976710656)
@@ -580,7 +592,7 @@ a=ptime:20
 a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1|2^48|66051:4 
 `
 
-	offer, err := ParseOffer([]byte(sdpData))
+	offer, err := ParseOfferWith(g, []byte(sdpData))
 	require.NoError(t, err)
 	require.NotEmpty(t, offer.CryptoProfiles)
 
@@ -685,12 +697,14 @@ func extractMKIFromSRTPPacket(packet []byte, mkiLength int, authTagSize int) []b
 
 // Test actually using the MKI in an offer with outgoing RTP packets
 func TestSRTPIntegration(t *testing.T) {
+	g := media.GlobalCodecs()
+
 	log := logger.GetLogger()
 	stop := make(chan struct{})
 	defer close(stop)
 
 	// Generate offer
-	offer, err := NewOffer(netip.MustParseAddr("127.0.0.1"), 5000, EncryptionRequire)
+	offer, err := NewOfferWith(g, netip.MustParseAddr("127.0.0.1"), 5000, EncryptionRequire)
 	require.NoError(t, err)
 	require.NotEmpty(t, offer.CryptoProfiles)
 
