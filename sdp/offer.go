@@ -52,9 +52,13 @@ type CodecInfo struct {
 	Codec media.Codec
 }
 
-func OfferCodecs() []CodecInfo {
+// OfferCodecsWith lists enabled codecs in the set for the SDP offer and assigns payload types to them.
+func OfferCodecsWith(s *media.CodecSet) []CodecInfo {
+	if s == nil {
+		s = media.GlobalCodecs()
+	}
 	const dynamicType = 101
-	codecs := media.EnabledCodecs()
+	codecs := s.ListEnabled()
 	slices.SortFunc(codecs, func(a, b media.Codec) int {
 		ai, bi := a.Info(), b.Info()
 		if ai.RTPIsStatic != bi.RTPIsStatic {
@@ -85,6 +89,13 @@ func OfferCodecs() []CodecInfo {
 	return infos
 }
 
+// OfferCodecs is the same as OfferCodecsWith called with media.GlobalCodecs().
+//
+// Deprecated: use OfferCodecsWith
+func OfferCodecs() []CodecInfo {
+	return OfferCodecsWith(media.GlobalCodecs())
+}
+
 type MediaDesc struct {
 	Codecs         []CodecInfo
 	DTMFType       byte // set to 0 if there's no DTMF
@@ -106,11 +117,12 @@ func appendCryptoProfiles(attrs []sdp.Attribute, profiles []srtp.Profile) []sdp.
 	return attrs
 }
 
-func OfferMedia(rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
+// OfferMediaWith creates a new SDP media description with a given codec set, public IP address and listening port.
+func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
 
-	codecs := OfferCodecs()
+	codecs := OfferCodecsWith(s)
 	attrs := make([]sdp.Attribute, 0, len(codecs)+4)
 	formats := make([]string, 0, len(codecs))
 	dtmfType := byte(0)
@@ -165,6 +177,14 @@ func OfferMedia(rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.Medi
 		}, nil
 }
 
+// OfferMedia creates a new SDP media description.
+//
+// Deprecated: use OfferMediaWith
+func OfferMedia(rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
+	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted)
+}
+
+// AnswerMedia creates a new SDP media description for an answer.
 func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *sdp.MediaDescription {
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
@@ -212,10 +232,11 @@ type Offer Description
 
 type Answer Description
 
-func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
+// NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening port.
+func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
 	sessId := rand.Uint64() // TODO: do we need to track these?
 
-	m, mediaDesc, err := OfferMedia(rtpListenerPort, encrypted)
+	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +273,14 @@ func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*
 	}, nil
 }
 
+// NewOffer creates a new SDP offer.
+//
+// Deprecated: use NewOfferWith
+func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
+	return NewOfferWith(media.GlobalCodecs(), publicIp, rtpListenerPort, encrypted)
+}
+
+// Answer generates an SDP answer for an offer.
 func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption) (*Answer, *MediaConfig, error) {
 	audio, err := SelectAudio(d.MediaDesc, false)
 	if err != nil {
@@ -321,6 +350,7 @@ func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption)
 		}, nil
 }
 
+// Apply the SDP offer to generate the final media config.
 func (d *Answer) Apply(offer *Offer, enc Encryption) (*MediaConfig, error) {
 	mc, _, err := d.apply(offer, enc, false)
 	return mc, err
@@ -396,7 +426,10 @@ func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, s
 	return s, nil
 }
 
-func Parse(data []byte) (*Description, error) {
+// ParseWith parses the SDP description using the codecs from the codec set.
+//
+// This is a helper that is called by both ParseOfferWith and ParseAnswerWith.
+func ParseWith(s *media.CodecSet, data []byte) (*Description, error) {
 	offer := new(Description)
 	if err := offer.SDP.Unmarshal(data); err != nil {
 		return nil, err
@@ -412,7 +445,7 @@ func Parse(data []byte) (*Description, error) {
 	} else if !offer.Addr.IsValid() || offer.Addr.Port() == 0 {
 		return nil, fmt.Errorf("invalid audio address %q", offer.Addr)
 	}
-	m, err := ParseMedia(audio)
+	m, err := ParseMediaWith(s, audio)
 	if err != nil {
 		return nil, err
 	}
@@ -420,20 +453,44 @@ func Parse(data []byte) (*Description, error) {
 	return offer, nil
 }
 
-func ParseOffer(data []byte) (*Offer, error) {
-	d, err := Parse(data)
+// ParseOfferWith parses the SDP offer using the codecs from the codec set.
+func ParseOfferWith(s *media.CodecSet, data []byte) (*Offer, error) {
+	d, err := ParseWith(s, data)
 	if err != nil {
 		return nil, err
 	}
 	return (*Offer)(d), nil
 }
 
-func ParseAnswer(data []byte) (*Answer, error) {
-	d, err := Parse(data)
+// ParseAnswerWith parses the SDP answer using the codecs from the codec set.
+func ParseAnswerWith(s *media.CodecSet, data []byte) (*Answer, error) {
+	d, err := ParseWith(s, data)
 	if err != nil {
 		return nil, err
 	}
 	return (*Answer)(d), nil
+}
+
+// Parse the SDP description.
+// This is a helper that is called by both ParseOffer and ParseAnswer.
+//
+// Deprecated: use ParseWith
+func Parse(data []byte) (*Description, error) {
+	return ParseWith(media.NewCodecSet(), data)
+}
+
+// ParseOffer parses the SDP offer.
+//
+// Deprecated: use ParseOfferWith
+func ParseOffer(data []byte) (*Offer, error) {
+	return ParseOfferWith(media.NewCodecSet(), data)
+}
+
+// ParseAnswer parses the SDP answer.
+//
+// Deprecated: use ParseAnswerWith
+func ParseAnswer(data []byte) (*Answer, error) {
+	return ParseAnswerWith(media.NewCodecSet(), data)
 }
 
 // Returns valid lifetime, counted in packets encrypted using the associated key.
@@ -562,7 +619,8 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 	}, nil
 }
 
-func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
+// ParseMediaWith parses SDP media description based on the given codec set.
+func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, error) {
 	var out MediaDesc
 	for _, m := range d.Attributes {
 		switch m.Key {
@@ -580,7 +638,7 @@ func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
 				out.DTMFType = byte(typ)
 				continue
 			}
-			codec, _ := CodecByName(name).(media.AudioCodec)
+			codec, _ := CodecByNameWith(s, name).(media.AudioCodec)
 			out.Codecs = append(out.Codecs, CodecInfo{
 				Type:  byte(typ),
 				Codec: codec,
@@ -601,7 +659,7 @@ func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
 			continue
 		}
 		codec, _ := rtp.CodecByPayloadType(byte(typ)).(media.AudioCodec)
-		if !media.CodecEnabled(codec) {
+		if !s.IsEnabled(codec) {
 			codec = nil
 		}
 		out.Codecs = append(out.Codecs, CodecInfo{
@@ -610,6 +668,13 @@ func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
 		})
 	}
 	return &out, nil
+}
+
+// ParseMedia parses SDP media description.
+//
+// Deprecated: use ParseMediaWith
+func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
+	return ParseMediaWith(media.GlobalCodecs(), d)
 }
 
 // MediaConfig is the canonical representation of the negotiated session.
