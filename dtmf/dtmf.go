@@ -238,7 +238,9 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 		}
 	}
 
-	events.ResetTimestamp(startTs)
+	if events != nil {
+		events.ResetTimestamp(startTs)
+	}
 
 	for {
 		select {
