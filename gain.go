@@ -42,15 +42,12 @@ func NewPCM16GainWriter(w PCM16Writer) *PCM16GainWriter {
 	return g
 }
 
-func (g *PCM16GainWriter) SetGain(v float32) {
+func (g *PCM16GainWriter) SetGain(v float32) error {
 	if v < 0 || math.IsNaN(float64(v)) {
-		v = 0
+		return fmt.Errorf("invalid gain %v: must be >= 0 and not NaN", v)
 	}
 	g.gain.Store(uint32(v * unityGain))
-}
-
-func (g *PCM16GainWriter) Gain() float32 {
-	return float32(g.gain.Load()) / unityGain
+	return nil
 }
 
 func (g *PCM16GainWriter) WriteSample(sample PCM16Sample) error {
@@ -84,5 +81,5 @@ func (g *PCM16GainWriter) Close() error {
 }
 
 func (g *PCM16GainWriter) String() string {
-	return fmt.Sprintf("PCM16GainWriter(%.3f) -> %s", g.Gain(), g.w)
+	return fmt.Sprintf("PCM16GainWriter(%.3f) -> %s", float32(g.gain.Load())/unityGain, g.w)
 }
