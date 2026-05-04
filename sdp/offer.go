@@ -476,21 +476,21 @@ func ParseAnswerWith(s *media.CodecSet, data []byte) (*Answer, error) {
 //
 // Deprecated: use ParseWith
 func Parse(data []byte) (*Description, error) {
-	return ParseWith(media.NewCodecSet(), data)
+	return ParseWith(media.GlobalCodecs(), data)
 }
 
 // ParseOffer parses the SDP offer.
 //
 // Deprecated: use ParseOfferWith
 func ParseOffer(data []byte) (*Offer, error) {
-	return ParseOfferWith(media.NewCodecSet(), data)
+	return ParseOfferWith(media.GlobalCodecs(), data)
 }
 
 // ParseAnswer parses the SDP answer.
 //
 // Deprecated: use ParseAnswerWith
 func ParseAnswer(data []byte) (*Answer, error) {
-	return ParseAnswerWith(media.NewCodecSet(), data)
+	return ParseAnswerWith(media.GlobalCodecs(), data)
 }
 
 // Returns valid lifetime, counted in packets encrypted using the associated key.
