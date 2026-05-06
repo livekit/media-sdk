@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"slices"
 	"sync"
 	"time"
 
@@ -51,32 +50,7 @@ func PlayAudio[T any](ctx context.Context, w Writer[T], sampleDur time.Duration,
 }
 
 func NewPCM16FrameWriter(buf *[]PCM16Sample, sampleRate int) PCM16Writer {
-	return &frameWriterPCM16{
-		buf:        buf,
-		sampleRate: sampleRate,
-	}
-}
-
-type frameWriterPCM16 struct {
-	buf        *[]PCM16Sample
-	sampleRate int
-}
-
-func (b *frameWriterPCM16) String() string {
-	return fmt.Sprintf("Frames(%d)", b.sampleRate)
-}
-
-func (b *frameWriterPCM16) SampleRate() int {
-	return b.sampleRate
-}
-
-func (b *frameWriterPCM16) Close() error {
-	return nil
-}
-
-func (b *frameWriterPCM16) WriteSample(data PCM16Sample) error {
-	*b.buf = append(*b.buf, slices.Clone(data))
-	return nil
+	return NewFrameWriter(buf, sampleRate)
 }
 
 func NewPCM16BufferWriter(buf *PCM16Sample, sampleRate int) PCM16Writer {
