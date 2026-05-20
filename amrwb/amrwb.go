@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/dennwc/amrwb-cgo"
 	"github.com/livekit/media-sdk"
-	amrdec "github.com/livekit/media-sdk/amrwb/dec"
-	amrenc "github.com/livekit/media-sdk/amrwb/enc"
 )
 
 const (
@@ -26,50 +25,10 @@ func init() {
 	}, Decode, Encode))
 }
 
-const (
-	PCMFrameSize = 320 // PCM frame size at 16kHz
-	FrameSizeMax = 61  // max encoded frame size
-)
-
-type PCMFrame [PCMFrameSize]int16
-
-var blockSizes = []byte{18, 24, 33, 37, 41, 47, 51, 59, 61, 6, 6, 0, 0, 0, 1, 1}
-
-// BlockSize returns size of the first AMR-WB block in data.
-func BlockSize(data []byte) int {
-	if len(data) == 0 {
-		return 0
-	}
-	mode := int((data[0] >> 3) & 0x0f)
-	if mode >= len(blockSizes) {
-		return -1
-	}
-	n := int(blockSizes[mode])
-	if n > len(data) {
-		return -1
-	}
-	return n
-}
-
 type Sample []byte
 
 func (s Sample) Size() int {
 	return len(s)
-}
-
-// Blocks counts the number of AMR-WB blocks in the frame.
-// It also returns the size of all valid blocks.
-func (s Sample) Blocks() (sz, cnt int) {
-	for len(s) > 0 {
-		n := BlockSize(s)
-		if n <= 0 {
-			break
-		}
-		sz += n
-		cnt++
-		s = s[sz:]
-	}
-	return
 }
 
 func (s Sample) CopyTo(dst []byte) (int, error) {
@@ -85,14 +44,14 @@ type Writer = media.WriteCloser[Sample]
 func Decode(w media.PCM16Writer) Writer {
 	return &Decoder{
 		w: w,
-		d: amrdec.New(),
+		d: amrwb.NewDecoder(),
 	}
 }
 
 type Decoder struct {
 	w     media.PCM16Writer
-	d     *amrdec.Decoder
-	frame PCMFrame
+	d     *amrwb.Decoder
+	frame amrwb.PCMFrame
 	buf   media.PCM16Sample
 }
 
@@ -113,14 +72,12 @@ func (d *Decoder) WriteSample(in Sample) error {
 	d.buf = d.buf[:0]
 	var blockErr error
 	for len(in) > 0 {
-		n := BlockSize(in)
-		if n <= 0 {
-			blockErr = errors.New("invalid amr-wb block")
+		n, err := d.d.Decode(&d.frame, in)
+		if err != nil {
+			blockErr = err
 			break
 		}
-		block := in[:n]
 		in = in[n:]
-		d.d.Decode((*amrdec.PCMFrame)(&d.frame), block)
 		d.buf = append(d.buf, d.frame[:]...)
 	}
 	if len(d.buf) != 0 {
@@ -134,13 +91,13 @@ func (d *Decoder) WriteSample(in Sample) error {
 func Encode(w Writer) media.PCM16Writer {
 	return &Encoder{
 		w: w,
-		e: amrenc.New(amrenc.Best),
+		e: amrwb.NewEncoder(amrwb.Best),
 	}
 }
 
 type Encoder struct {
 	w    Writer
-	e    *amrenc.Encoder
+	e    *amrwb.Encoder
 	buf  []byte
 	done bool
 }
@@ -169,18 +126,18 @@ func (e *Encoder) WriteSample(in media.PCM16Sample) error {
 	}
 	e.buf = e.buf[:0]
 	for len(in) > 0 {
-		const n = PCMFrameSize
+		const n = amrwb.PCMFrameSize
 		if len(in) < n {
 			// Zero pad, it's okay for the last frame only.
 			// We'll return the error if we get another frame after this.
 			e.done = true
-			var buf PCMFrame
+			var buf amrwb.PCMFrame
 			copy(buf[:], in)
 			in = buf[:]
 		}
-		frame := (*PCMFrame)(in[:n])
+		frame := (*amrwb.PCMFrame)(in[:n])
 		in = in[n:]
-		e.buf = e.e.Encode(e.buf, (*amrenc.PCMFrame)(frame))
+		e.buf = e.e.Encode(e.buf, frame)
 	}
 	if len(e.buf) != 0 {
 		if err := e.w.WriteSample(e.buf); err != nil {
