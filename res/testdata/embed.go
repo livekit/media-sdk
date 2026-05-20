@@ -18,3 +18,6 @@ import _ "embed"
 
 //go:embed change-amelia.ogg
 var TestAudioOgg []byte
+
+//go:embed change-amelia-16k.ogg
+var TestAudioOgg16K []byte
