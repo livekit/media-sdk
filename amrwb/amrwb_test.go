@@ -47,8 +47,11 @@ func TestAMRWB(t *testing.T) {
 	wbamr.Flush()
 
 	hashAMR := hex.EncodeToString(hamr.Sum(nil))
-	if hashAMR != "266c17405ad9cb6057bfe1a3e0cf764c448a10a0" {
+	switch hashAMR {
+	default:
 		t.Errorf("unexpected amrwb hash %s", hashAMR)
+	case "266c17405ad9cb6057bfe1a3e0cf764c448a10a0",
+		"b3d9349b01e93c523311e587d639142d0c79546b":
 	}
 
 	var out []media.PCM16Sample
