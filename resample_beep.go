@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Copyright 2024 LiveKit, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,10 +14,12 @@
 
 package media
 
-const quality = 3
+import "fmt"
 
-func resampleBuffer(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int) PCM16Sample {
-	r := beepResample(quality, srcSampleRate, dstSampleRate, NewPCM16BufferReader(src))
+const beepQuality = 3
+
+func resampleBufferBeep(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int, opts *resampleOptions) PCM16Sample {
+	r := beepResample(beepQuality, srcSampleRate, dstSampleRate, NewPCM16BufferReader(src))
 	sz := 0
 	if dstSampleRate < srcSampleRate {
 		div := srcSampleRate / dstSampleRate
@@ -33,19 +33,19 @@ func resampleBuffer(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSamp
 	return append(dst, out[:n]...)
 }
 
-func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int) WriteCloser[PCM16Sample] {
+func newResampleWriterBeep(w WriteCloser[PCM16Sample], sampleRate int, opts *resampleOptions) WriteCloser[PCM16Sample] {
 	srcRate := sampleRate
 	dstRate := w.SampleRate()
-	r := &resampleWriter{
+	r := &resampleWriterBeep{
 		w:       w,
 		srcRate: srcRate,
 		dstRate: dstRate,
 	}
-	r.r = beepResample(quality, srcRate, dstRate, r)
+	r.r = beepResample(beepQuality, srcRate, dstRate, r)
 	return r
 }
 
-type resampleWriter struct {
+type resampleWriterBeep struct {
 	w       WriteCloser[PCM16Sample]
 	r       *beepResampler
 	inbuf   PCM16Sample
@@ -54,21 +54,25 @@ type resampleWriter struct {
 	buf     PCM16Sample
 }
 
-func (w *resampleWriter) SampleRate() int {
+func (w *resampleWriterBeep) String() string {
+	return fmt.Sprintf("Resample(%d->%d) -> %s", w.srcRate, w.dstRate, w.w.String())
+}
+
+func (w *resampleWriterBeep) SampleRate() int {
 	return w.srcRate
 }
 
-func (w *resampleWriter) Close() error {
+func (w *resampleWriterBeep) Close() error {
 	return w.w.Close()
 }
 
-func (w *resampleWriter) ReadSample(data PCM16Sample) (int, error) {
+func (w *resampleWriterBeep) ReadSample(data PCM16Sample) (int, error) {
 	n := copy(data, w.inbuf)
 	w.inbuf = w.inbuf[n:]
 	return n, nil
 }
 
-func (w *resampleWriter) WriteSample(data PCM16Sample) error {
+func (w *resampleWriterBeep) WriteSample(data PCM16Sample) error {
 	w.inbuf = append(w.inbuf, data...)
 	var sz int
 	if w.srcRate > w.dstRate {
