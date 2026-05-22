@@ -44,8 +44,8 @@ func resampleSize(dstSampleRate, srcSampleRate int, srcSize int) int {
 	return sz
 }
 
-func resampleBuffer(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int) PCM16Sample {
-	w := newResampleWriter(NewPCM16BufferWriter(&dst, dstSampleRate), srcSampleRate)
+func resampleBuffer(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int, opts *resampleOptions) PCM16Sample {
+	w := newResampleWriter(NewPCM16BufferWriter(&dst, dstSampleRate), srcSampleRate, opts)
 	err := w.WriteSample(src)
 	_ = w.Close()
 	if err != nil {
@@ -54,7 +54,7 @@ func resampleBuffer(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSamp
 	return dst
 }
 
-func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int) WriteCloser[PCM16Sample] {
+func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int, opts *resampleOptions) WriteCloser[PCM16Sample] {
 	srcRate := sampleRate
 	dstRate := w.SampleRate()
 	r := &resampleWriter{
@@ -188,6 +188,7 @@ func newSoxr(dstRate, srcRate int, quality int) (*soxrResampler, error) {
 	if err != nil {
 		return nil, err
 	}
+	// p.seed = 1234567890 // TODO: set seed somehow, otherwise results are random
 	// This variable helps avoid double-free on the soxr resampler ptr. See soxrCleanup.
 	done := new(atomic.Bool)
 	r := &soxrResampler{
