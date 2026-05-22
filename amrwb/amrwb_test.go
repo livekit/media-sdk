@@ -1,6 +1,10 @@
 package amrwb
 
 import (
+	"bufio"
+	"crypto/sha1"
+	"encoding/hex"
+	"io"
 	"os"
 	"os/exec"
 	"testing"
@@ -33,9 +37,18 @@ func TestAMRWB(t *testing.T) {
 	}
 	defer famr.Close()
 
-	famr.WriteString("#!AMR-WB\n")
+	hamr := sha1.New()
+
+	wbamr := bufio.NewWriter(io.MultiWriter(famr, hamr))
+	wbamr.WriteString("#!AMR-WB\n")
 	for _, block := range blocks {
-		famr.Write(block)
+		wbamr.Write(block)
+	}
+	wbamr.Flush()
+
+	hashAMR := hex.EncodeToString(hamr.Sum(nil))
+	if hashAMR != "266c17405ad9cb6057bfe1a3e0cf764c448a10a0" {
+		t.Errorf("unexpected amrwb hash %s", hashAMR)
 	}
 
 	var out []media.PCM16Sample
@@ -57,10 +70,20 @@ func TestAMRWB(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
+
+	h := sha1.New()
+	bw := bufio.NewWriter(io.MultiWriter(f, h))
 	err = media.DumpFramesPCM16(f, rate, out)
 	if err != nil {
 		t.Fatal(err)
 	}
+	bw.Flush()
+
+	hashOut := hex.EncodeToString(h.Sum(nil))
+	if hashOut != "da39a3ee5e6b4b0d3255bfef95601890afd80709" {
+		t.Errorf("unexpected output hash %s", hashOut)
+	}
+
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Log("ffmpeg not found in $PATH")
 		return
