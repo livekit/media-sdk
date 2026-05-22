@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/dennwc/amrwb-cgo"
+
 	"github.com/livekit/media-sdk"
 )
 
@@ -56,6 +57,9 @@ func (s Sample) CopyTo(dst []byte) (int, error) {
 type Writer = media.WriteCloser[Sample]
 
 func Decode(w media.PCM16Writer) Writer {
+	if w.SampleRate() != SampleRate {
+		w = media.ResampleWriter(w, SampleRate)
+	}
 	return &Decoder{
 		w: w,
 		d: amrwb.NewDecoder(),
@@ -103,6 +107,9 @@ func (d *Decoder) WriteSample(in Sample) error {
 }
 
 func Encode(w Writer) media.PCM16Writer {
+	if w.SampleRate() != SampleRate {
+		panic("unsupported sample rate")
+	}
 	return &Encoder{
 		w: w,
 		e: amrwb.NewEncoder(amrwb.Best),
