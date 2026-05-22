@@ -6,11 +6,11 @@ require github.com/stretchr/testify v1.10.0
 
 require (
 	github.com/at-wat/ebml-go v0.17.1
-	github.com/dennwc/amrwb-cgo v0.0.0-20260520132032-df56718048c8
 	github.com/frostbyte73/core v0.1.1
 	github.com/go-logr/logr v1.4.2
 	github.com/gotranspile/g722 v0.0.0-20240123003956-384a1bb16a19
 	github.com/jfreymuth/oggvorbis v1.0.5
+	github.com/livekit/amrwb-cgo v0.0.0-20260522181958-d25e771d1b14
 	github.com/livekit/protocol v1.38.1-0.20250511053429-f8ea8179871e
 	github.com/pion/interceptor v0.1.37
 	github.com/pion/rtp v1.8.13

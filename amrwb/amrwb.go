@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dennwc/amrwb-cgo"
+	"github.com/livekit/amrwb-cgo"
 
 	"github.com/livekit/media-sdk"
 )
