@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/livekit/amrwb-cgo"
 	"github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/res"
 	"github.com/livekit/media-sdk/res/testdata"
@@ -40,7 +41,7 @@ func TestAMRWB(t *testing.T) {
 	hamr := sha1.New()
 
 	wbamr := bufio.NewWriter(io.MultiWriter(famr, hamr))
-	wbamr.WriteString("#!AMR-WB\n")
+	wbamr.WriteString(amrwb.Magic)
 	for _, block := range blocks {
 		wbamr.Write(block)
 	}
