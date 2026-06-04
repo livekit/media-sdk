@@ -46,8 +46,8 @@ github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532 h1:q0Gj2RmsBLAcs
 github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532/go.mod h1:nGBFrVVLyO0RlyM2pWnP/VKaZO6W3rzecL/YlkTPkW8=
 github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731 h1:9x+U2HGLrSw5ATTo469PQPkqzdoU7be46ryiCDO3boc=
 github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731/go.mod h1:Rs3MhFwutWhGwmY1VQsygw28z5bWcnEYmS1OG9OxjOQ=
-github.com/livekit/protocol v1.46.6-0.20260604183504-b6c88bd4c277 h1:uL3iDKquFSa+wOzng7T6mUvdq0jTKRWfDcwtfnMUQZk=
-github.com/livekit/protocol v1.46.6-0.20260604183504-b6c88bd4c277/go.mod h1:VGYmD9n9P7YHSl+gEwHvqOiPvOhQ3Pi2OEN9RnMgKwY=
+github.com/livekit/protocol v1.46.6-0.20260604204719-ab1b54f925cf h1:O0a0rI04bBcUIIiFFQtA6FlVzuoqFqoejAkznOJKKJ0=
+github.com/livekit/protocol v1.46.6-0.20260604204719-ab1b54f925cf/go.mod h1:XhnYeOm04MQaZvaeVxMBzu9/3d2pEt/CAHbGKFWAHsQ=
 github.com/livekit/psrpc v0.7.1 h1:ms37az0QTD3UXIWuUC5D/SkmKOlRMVRsI261eBWu/Vw=
 github.com/livekit/psrpc v0.7.1/go.mod h1:bZ4iHFQptTkbPnB0LasvRNu/OBYXEu1NA6O5BMFo9kk=
 github.com/nats-io/nats.go v1.52.0 h1:n3avV4VBsCgsdwh71TppsTwtv+QdPs7ntSKM8qJLGsc=

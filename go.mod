@@ -11,7 +11,7 @@ require (
 	github.com/gotranspile/g722 v0.0.0-20240123003956-384a1bb16a19
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532
-	github.com/livekit/protocol v1.46.6-0.20260604183504-b6c88bd4c277
+	github.com/livekit/protocol v1.46.6-0.20260604204719-ab1b54f925cf
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/rtp v1.10.2
 	github.com/pion/sdp/v3 v3.0.18
@@ -34,6 +34,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
