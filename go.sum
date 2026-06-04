@@ -12,8 +12,8 @@ github.com/at-wat/ebml-go v0.17.1 h1:pWG1NOATCFu1hnlowCzrA1VR/3s8tPY6qpU+2FwW7X4
 github.com/at-wat/ebml-go v0.17.1/go.mod h1:w1cJs7zmGsb5nnSvhWGKLCxvfu4FVx5ERvYDIalj1ww=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
-github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
-github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
+github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dennwc/iters v1.2.2 h1:XH2/Etihiy9ZvPOVCR+icQXeYlhbvS7k0qro4x/2qQo=
 github.com/dennwc/iters v1.2.2/go.mod h1:M9KuuMBeyEXYTmB7EnI9SCyALFCmPWOIxn5W1L0CjGg=
 github.com/frostbyte73/core v0.1.1 h1:ChhJOR7bAKOCPbA+lqDLE2cGKlCG5JXsDvvQr4YaJIA=
@@ -46,10 +46,10 @@ github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532 h1:q0Gj2RmsBLAcs
 github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532/go.mod h1:nGBFrVVLyO0RlyM2pWnP/VKaZO6W3rzecL/YlkTPkW8=
 github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731 h1:9x+U2HGLrSw5ATTo469PQPkqzdoU7be46ryiCDO3boc=
 github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731/go.mod h1:Rs3MhFwutWhGwmY1VQsygw28z5bWcnEYmS1OG9OxjOQ=
-github.com/livekit/protocol v1.46.6-0.20260604204719-ab1b54f925cf h1:O0a0rI04bBcUIIiFFQtA6FlVzuoqFqoejAkznOJKKJ0=
-github.com/livekit/protocol v1.46.6-0.20260604204719-ab1b54f925cf/go.mod h1:XhnYeOm04MQaZvaeVxMBzu9/3d2pEt/CAHbGKFWAHsQ=
-github.com/livekit/psrpc v0.7.1 h1:ms37az0QTD3UXIWuUC5D/SkmKOlRMVRsI261eBWu/Vw=
-github.com/livekit/psrpc v0.7.1/go.mod h1:bZ4iHFQptTkbPnB0LasvRNu/OBYXEu1NA6O5BMFo9kk=
+github.com/livekit/protocol v1.46.6-0.20260604233857-6b0178b3af2a h1:LXGsNL00Q5AkxRKuQzIS53KIvtPSyCwnjy5YuQG+Pqc=
+github.com/livekit/protocol v1.46.6-0.20260604233857-6b0178b3af2a/go.mod h1:6Qi/ZnHmZdlOBIZgMUgQUE7gpR0Se3qnwGHhDjOqcMQ=
+github.com/livekit/psrpc v0.7.2-0.20260604225640-4bab4033deca h1:d6itWQ1sp5wkUPsgo7k2hNHbZyDp18NtSJg1B6lNJKA=
+github.com/livekit/psrpc v0.7.2-0.20260604225640-4bab4033deca/go.mod h1:rAI+m2+/cb4x9RXhLRtUx5ZwdfjjXOl4zi46IjEetaw=
 github.com/nats-io/nats.go v1.52.0 h1:n3avV4VBsCgsdwh71TppsTwtv+QdPs7ntSKM8qJLGsc=
 github.com/nats-io/nats.go v1.52.0/go.mod h1:26HypzazeOkyO3/mqd1zZd53STJN0EjCYF9Uy2ZOBno=
 github.com/nats-io/nkeys v0.4.16 h1:rd5oAuLOb8mnAycB0xleuEBNS1pVVnN0fv/FF34Eypg=
@@ -74,8 +74,8 @@ github.com/pion/transport/v4 v4.0.2 h1:ifYlPqNwsy6aKQ9y8yzxXlHae5431ZrH2avkD/Rn6
 github.com/pion/transport/v4 v4.0.2/go.mod h1:06hFI+jCFcok2X2MekVufNZ/uzNZXivGBPfviSVcjgM=
 github.com/pion/webrtc/v4 v4.2.14 h1:Q6zMs+fSDsYuhZcNlvFGBxCOMHVV9oYcDa6O9/HIGTc=
 github.com/pion/webrtc/v4 v4.2.14/go.mod h1:87NVKP86+g4OMrRxWhjWfUjeXP4JrV6RTlUrIW+/Jak=
-github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
-github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
+github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/puzpuzpuz/xsync/v4 v4.5.0 h1:vOSWu6b57/emh+L/Cw0BeQfvxa/cogFywXHeGUxQxAg=
 github.com/puzpuzpuz/xsync/v4 v4.5.0/go.mod h1:VJDmTCJMBt8igNxnkQd86r+8KUeN1quSfNKu5bLYFQo=
 github.com/redis/go-redis/v9 v9.20.0 h1:WnQYxLkgO2xiXTCJY0ldIiI8dNqCDlQAG+AtaH7a2a0=
