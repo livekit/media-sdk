@@ -5,13 +5,13 @@ go 1.26
 require github.com/stretchr/testify v1.11.1
 
 require (
-	github.com/at-wat/ebml-go v0.17.1
+	github.com/at-wat/ebml-go v0.18.0
 	github.com/frostbyte73/core v0.1.1
 	github.com/go-logr/logr v1.4.3
 	github.com/gotranspile/g722 v0.0.0-20240123003956-384a1bb16a19
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532
-	github.com/livekit/protocol v1.46.6-0.20260604233857-6b0178b3af2a
+	github.com/livekit/protocol v1.46.6-0.20260605012906-a7a83da5bb55
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/rtp v1.10.2
 	github.com/pion/sdp/v3 v3.0.18
@@ -26,7 +26,6 @@ require (
 	github.com/gammazero/deque v1.2.1 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/kr/pretty v0.1.0 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect
@@ -40,6 +39,6 @@ require (
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
+	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
