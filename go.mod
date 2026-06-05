@@ -11,12 +11,12 @@ require (
 	github.com/gotranspile/g722 v0.0.0-20240123003956-384a1bb16a19
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532
-	github.com/livekit/protocol v1.46.6-0.20260605012906-a7a83da5bb55
+	github.com/livekit/protocol v1.46.6-0.20260605181725-7f0893ab5bf2
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/rtp v1.10.2
 	github.com/pion/sdp/v3 v3.0.18
 	github.com/pion/srtp/v3 v3.0.11
-	github.com/pion/webrtc/v4 v4.2.14
+	github.com/pion/webrtc/v4 v4.2.11
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
 )
