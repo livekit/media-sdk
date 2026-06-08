@@ -80,3 +80,55 @@ func ListenUDPPortRangeWithConfig(portMin, portMax int, ip netip.Addr, lc *net.L
 		return conn.(*net.UDPConn), nil
 	})
 }
+
+// bindEvenRange binds an even UDP port within the given range.
+func bindEvenRange(portMin, portMax int, ip netip.Addr, create bindFunc) (*net.UDPConn, error) {
+	if portMin <= 0 {
+		portMin = 1
+	}
+	if portMax <= 0 || portMax > 0xFFFF {
+		portMax = 0xFFFF
+	}
+	evenMin := (portMin + 1) &^ 1
+	evenMax := portMax &^ 1
+	if evenMin > evenMax {
+		return nil, ErrListenFailed
+	}
+	ports := (evenMax-evenMin)/2 + 1
+	portCurrent := evenMin + 2*rand.Intn(ports)
+
+	for try := 0; try < ports; try++ {
+		c, err := create(portCurrent, ip)
+		if err == nil {
+			return c, nil
+		} else if !errors.Is(err, syscall.EADDRINUSE) {
+			return c, err
+		}
+		portCurrent += 2
+		if portCurrent > evenMax {
+			portCurrent = evenMin
+		}
+	}
+	return nil, ErrListenFailed
+}
+
+// ListenUDPEvenPortRange binds an even UDP port for RTP, per RFC 3550 convention.
+func ListenUDPEvenPortRange(portMin, portMax int, ip netip.Addr) (*net.UDPConn, error) {
+	return bindEvenRange(portMin, portMax, ip, func(port int, ip netip.Addr) (*net.UDPConn, error) {
+		addr := &net.UDPAddr{IP: ip.AsSlice(), Port: port}
+		return net.ListenUDP("udp", addr)
+	})
+}
+
+// ListenUDPEvenPortRangeWithConfig is ListenUDPEvenPortRange with a custom net.ListenConfig.
+func ListenUDPEvenPortRangeWithConfig(portMin, portMax int, ip netip.Addr, lc *net.ListenConfig) (*net.UDPConn, error) {
+	ctx := context.Background() // ctx is only used to resolve domain names, which we don't use here.
+	ipStr := ip.String()
+	return bindEvenRange(portMin, portMax, ip, func(port int, ip netip.Addr) (*net.UDPConn, error) {
+		conn, err := lc.ListenPacket(ctx, "udp", fmt.Sprintf("%s:%d", ipStr, port))
+		if err != nil {
+			return nil, err
+		}
+		return conn.(*net.UDPConn), nil
+	})
+}
