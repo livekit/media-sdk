@@ -23,11 +23,15 @@ import (
 	"github.com/livekit/media-sdk"
 )
 
-const ULawSDPName = "PCMU/8000"
+const (
+	ULawSDPNameOnly    = "PCMU"
+	ULawSDPNameAndRate = ULawSDPNameOnly + "/8000"
+	ULawSDPName        = ULawSDPNameAndRate // Deprecated: use ULawSDPNameOnly or ULawSDPNameAndRate
+)
 
 func init() {
 	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:     ULawSDPName,
+		SDPName:     ULawSDPNameAndRate,
 		SampleRate:  8000,
 		RTPDefType:  prtp.PayloadTypePCMU,
 		RTPIsStatic: true,

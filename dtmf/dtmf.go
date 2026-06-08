@@ -26,12 +26,16 @@ import (
 	"github.com/livekit/media-sdk/tones"
 )
 
-const SDPName = "telephone-event/8000"
+const (
+	SDPNameOnly    = "telephone-event"
+	SDPNameAndRate = SDPNameOnly + "/8000"
+	SDPName        = SDPNameAndRate // Deprecated: use SDPNameOnly or SDPNameAndRate
+)
 const SampleRate = 8000
 
 func init() {
 	media.RegisterCodec(media.NewCodec(media.CodecInfo{
-		SDPName:     SDPName,
+		SDPName:     SDPNameAndRate,
 		SampleRate:  SampleRate,
 		RTPIsStatic: false,
 		Priority:    -100, // let it be last in SDP

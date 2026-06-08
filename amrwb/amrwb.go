@@ -25,13 +25,15 @@ import (
 )
 
 const (
-	SDPName    = "AMR-WB/16000"
-	SampleRate = 16000
+	SDPNameOnly    = "AMR-WB"
+	SDPNameAndRate = SDPNameOnly + "/16000"
+	SDPName        = SDPNameAndRate // Deprecated: use SDPNameOnly or SDPNameAndRate
+	SampleRate     = 16000
 )
 
 func init() {
 	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:     SDPName,
+		SDPName:     SDPNameAndRate,
 		SampleRate:  SampleRate,
 		RTPIsStatic: false,
 		Priority:    -4,

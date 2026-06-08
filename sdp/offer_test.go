@@ -97,7 +97,7 @@ func TestSDPMediaOffer(t *testing.T) {
 	}, offer)
 
 	noG722 := g.NewSet()
-	noG722.SetEnabled(g722.SDPName, false)
+	noG722.SetEnabled(g722.SDPNameAndRate, false)
 
 	_, offer, err = OfferMediaWith(noG722, port, EncryptionNone)
 	require.NoError(t, err)
@@ -144,7 +144,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g, g722.SDPName),
+				Codec:    getCodec(g, g722.SDPNameAndRate),
 				Type:     9,
 				DTMFType: 101,
 			},
@@ -162,7 +162,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g, g722.SDPName),
+				Codec:    getCodec(g, g722.SDPNameAndRate),
 				Type:     9,
 				DTMFType: 101,
 			},
@@ -179,7 +179,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g722.SDPName),
+				Codec: getCodec(g, g722.SDPNameAndRate),
 				Type:  9,
 			},
 		},
@@ -196,7 +196,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g, g722.SDPName),
+				Codec:    getCodec(g, g722.SDPNameAndRate),
 				Type:     9,
 				DTMFType: 103,
 			},
@@ -213,7 +213,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g, g711.ULawSDPName),
+				Codec:    getCodec(g, g711.ULawSDPNameAndRate),
 				Type:     0,
 				DTMFType: 101,
 			},
@@ -230,7 +230,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g, g722.SDPName),
+				Codec:    getCodec(g, g722.SDPNameAndRate),
 				Type:     9,
 				DTMFType: 101,
 			},
@@ -259,7 +259,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g, g711.ULawSDPName),
+				Codec:    getCodec(g, g711.ULawSDPNameAndRate),
 				Type:     0,
 				DTMFType: 101,
 			},
@@ -273,7 +273,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec:    getCodec(g, g711.ULawSDPName),
+				Codec:    getCodec(g, g711.ULawSDPNameAndRate),
 				Type:     0,
 				DTMFType: 101,
 			},
@@ -290,7 +290,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g711.ULawSDPName),
+				Codec: getCodec(g, g711.ULawSDPNameAndRate),
 				Type:  0,
 			},
 		},
@@ -306,7 +306,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g711.ALawSDPName),
+				Codec: getCodec(g, g711.ALawSDPNameAndRate),
 				Type:  8,
 			},
 		},
@@ -361,13 +361,13 @@ func TestSDPMediaAnswerOneDisabled(t *testing.T) {
 		},
 	}
 	exp := &AudioConfig{
-		Codec:    getCodec(g, g711.ULawSDPName),
+		Codec:    getCodec(g, g711.ULawSDPNameAndRate),
 		Type:     0,
 		DTMFType: 101,
 	}
 
 	noG722 := g.NewSet()
-	noG722.SetEnabled(g722.SDPName, false)
+	noG722.SetEnabled(g722.SDPNameAndRate, false)
 
 	m, err := ParseMediaWith(noG722, &offer)
 	require.NoError(t, err)
@@ -392,8 +392,8 @@ func TestSDPMediaAnswerAllDisabled(t *testing.T) {
 	}
 
 	allOff := g.NewSet()
-	allOff.SetEnabled(g722.SDPName, false)
-	allOff.SetEnabled(g711.ULawSDPName, false)
+	allOff.SetEnabled(g722.SDPNameAndRate, false)
+	allOff.SetEnabled(g711.ULawSDPNameAndRate, false)
 
 	m, err := ParseMediaWith(allOff, &offer)
 	require.NoError(t, err)
