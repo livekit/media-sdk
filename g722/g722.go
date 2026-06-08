@@ -26,7 +26,11 @@ import (
 	"github.com/livekit/media-sdk"
 )
 
-const SDPName = "G722/8000"
+const (
+	SDPNameOnly    = "G722"
+	SDPNameAndRate = SDPNameOnly + "/8000"
+	SDPName        = SDPNameAndRate // Deprecated: use SDPNameOnly or SDPNameAndRate
+)
 
 var (
 	g722ID     atomic.Uint32
@@ -35,7 +39,7 @@ var (
 
 func init() {
 	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:      SDPName,
+		SDPName:      SDPNameAndRate,
 		SampleRate:   16000,
 		RTPClockRate: 8000,
 		RTPDefType:   prtp.PayloadTypeG722,

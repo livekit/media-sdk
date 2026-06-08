@@ -127,7 +127,7 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 	formats := make([]string, 0, len(codecs))
 	dtmfType := byte(0)
 	for _, codec := range codecs {
-		if codec.Codec.Info().SDPName == dtmf.SDPName {
+		if codec.Codec.Info().SDPName == dtmf.SDPNameAndRate {
 			dtmfType = codec.Type
 		}
 		styp := strconv.Itoa(int(codec.Type))
@@ -198,7 +198,7 @@ func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *
 	if audio.DTMFType != 0 {
 		formats = append(formats, strconv.Itoa(int(audio.DTMFType)))
 		attrs = append(attrs, []sdp.Attribute{
-			{Key: "rtpmap", Value: fmt.Sprintf("%d %s", audio.DTMFType, dtmf.SDPName)},
+			{Key: "rtpmap", Value: fmt.Sprintf("%d %s", audio.DTMFType, dtmf.SDPNameAndRate)},
 			{Key: "fmtp", Value: fmt.Sprintf("%d 0-16", audio.DTMFType)},
 		}...)
 	}
@@ -634,7 +634,7 @@ func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, err
 				continue
 			}
 			name := sub[1]
-			if name == dtmf.SDPName || name == dtmf.SDPName+"/1" {
+			if name == dtmf.SDPNameAndRate || name == dtmf.SDPNameAndRate+"/1" {
 				out.DTMFType = byte(typ)
 				continue
 			}
