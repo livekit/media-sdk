@@ -10,7 +10,7 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/gotranspile/g722 v0.0.0-20240123003956-384a1bb16a19
 	github.com/jfreymuth/oggvorbis v1.0.5
-	github.com/livekit/amrwb-cgo v0.0.0-20260527094629-96c39974d532
+	github.com/livekit/amrwb-cgo v0.0.0-20260612153743-6d4b69dc1470
 	github.com/livekit/protocol v1.46.7-0.20260605212020-c0615a2f6f84
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/rtp v1.10.2
