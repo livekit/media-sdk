@@ -31,6 +31,13 @@ const (
 	SampleRate     = 16000
 )
 
+type Format = amrwb.Format
+
+const (
+	Storage               = amrwb.Storage
+	RTPBandwidthEfficient = amrwb.RTPBandwidthEfficient
+)
+
 func init() {
 	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
 		SDPName:     SDPNameAndRate,
@@ -39,7 +46,11 @@ func init() {
 		Priority:    -4,
 		FileExt:     "amrwb",
 		Disabled:    true,
-	}, Decode, Encode))
+	}, func(w media.PCM16Writer) media.WriteCloser[Sample] {
+		return Decode(w, RTPBandwidthEfficient)
+	}, func(w media.WriteCloser[Sample]) media.PCM16Writer {
+		return Encode(w, RTPBandwidthEfficient)
+	}))
 }
 
 type Sample []byte
@@ -58,13 +69,13 @@ func (s Sample) CopyTo(dst []byte) (int, error) {
 
 type Writer = media.WriteCloser[Sample]
 
-func Decode(w media.PCM16Writer) Writer {
+func Decode(w media.PCM16Writer, format amrwb.Format) Writer {
 	if w.SampleRate() != SampleRate {
 		w = media.ResampleWriter(w, SampleRate)
 	}
 	return &Decoder{
 		w: w,
-		d: amrwb.NewDecoder(),
+		d: amrwb.NewDecoder(format),
 	}
 }
 
@@ -108,13 +119,17 @@ func (d *Decoder) WriteSample(in Sample) error {
 	return blockErr
 }
 
-func Encode(w Writer) media.PCM16Writer {
+func Encode(w Writer, format amrwb.Format) media.PCM16Writer {
+	return EncodeWith(w, format, amrwb.Best)
+}
+
+func EncodeWith(w Writer, format amrwb.Format, mode amrwb.Mode) media.PCM16Writer {
 	if w.SampleRate() != SampleRate {
 		panic("unsupported sample rate")
 	}
 	return &Encoder{
 		w: w,
-		e: amrwb.NewEncoder(amrwb.Best),
+		e: amrwb.NewEncoder(format, mode),
 	}
 }
 
