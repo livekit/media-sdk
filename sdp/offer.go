@@ -100,6 +100,7 @@ type MediaDesc struct {
 	Codecs         []CodecInfo
 	DTMFType       byte // set to 0 if there's no DTMF
 	CryptoProfiles []srtp.Profile
+	Direction      sdp.Direction
 }
 
 func appendCryptoProfiles(attrs []sdp.Attribute, profiles []srtp.Profile) []sdp.Attribute {
@@ -450,6 +451,19 @@ func ParseWith(s *media.CodecSet, data []byte) (*Description, error) {
 		return nil, err
 	}
 	offer.MediaDesc = *m
+
+	dir := sdp.DirectionSendRecv
+	for _, key := range []string{"sendrecv", "sendonly", "recvonly", "inactive"} {
+		if _, ok := offer.SDP.Attribute(key); ok {
+			dir, _ = sdp.NewDirection(key)
+			break
+		}
+	}
+	if m.Direction != 0 {
+		dir = m.Direction
+	}
+	offer.MediaDesc.Direction = dir
+
 	return offer, nil
 }
 
@@ -651,6 +665,12 @@ func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, err
 				continue
 			}
 			out.CryptoProfiles = append(out.CryptoProfiles, *p)
+		case "sendrecv", "sendonly", "recvonly", "inactive":
+			dir, err := sdp.NewDirection(m.Key)
+			if err != nil {
+				continue
+			}
+			out.Direction = dir
 		}
 	}
 	for _, f := range d.MediaName.Formats {
