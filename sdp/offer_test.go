@@ -813,3 +813,69 @@ func TestSRTPIntegration(t *testing.T) {
 	packetMKI := extractMKIFromSRTPPacket(offerCaptured[0], len(offerMKI), authTagSize)
 	require.Equal(t, offerMKI, packetMKI, "MKI %v does not match expected value %v", packetMKI, offerMKI)
 }
+
+func TestParseDirection(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	const head = `v=0
+o=- 1 1 IN IP4 203.0.113.5
+s=LiveKit
+c=IN IP4 203.0.113.5
+t=0 0
+`
+
+	tests := []struct {
+		name string
+		sdp  string
+		want sdp.Direction
+	}{
+		{
+			name: "media-level sendonly (hold)",
+			sdp: head + `m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendonly
+`,
+			want: sdp.DirectionSendOnly,
+		},
+		{
+			name: "no attribute defaults to sendrecv",
+			sdp: head + `m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+`,
+			want: sdp.DirectionSendRecv,
+		},
+		{
+			name: "session-level applies when media omits",
+			sdp: head + `a=sendonly
+m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+`,
+			want: sdp.DirectionSendOnly,
+		},
+		{
+			name: "media overrides session",
+			sdp: head + `a=inactive
+m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendonly
+`,
+			want: sdp.DirectionSendOnly,
+		},
+		{
+			name: "inactive media level",
+			sdp: head + `m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+`,
+			want: sdp.DirectionInactive,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := ParseWith(g, []byte(test.sdp))
+			require.NoError(t, err)
+			require.Equal(t, test.want, d.Direction)
+		})
+	}
+}
