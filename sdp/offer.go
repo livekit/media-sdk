@@ -186,7 +186,7 @@ func OfferMedia(rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.Medi
 }
 
 // AnswerMedia creates a new SDP media description for an answer.
-func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *sdp.MediaDescription {
+func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile, dir sdp.Direction) *sdp.MediaDescription {
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
 
@@ -210,7 +210,7 @@ func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *
 	}
 	attrs = append(attrs, []sdp.Attribute{
 		{Key: "ptime", Value: "20"},
-		{Key: "sendrecv"},
+		{Key: dir.String()},
 	}...)
 	return &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -220,6 +220,21 @@ func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *
 			Formats: formats,
 		},
 		Attributes: attrs,
+	}
+}
+
+func mirror(d sdp.Direction) sdp.Direction {
+	switch d {
+	case sdp.DirectionSendRecv:
+		return sdp.DirectionSendRecv
+	case sdp.DirectionSendOnly:
+		return sdp.DirectionRecvOnly
+	case sdp.DirectionRecvOnly:
+		return sdp.DirectionSendOnly
+	case sdp.DirectionInactive:
+		return sdp.DirectionInactive
+	default:
+		return sdp.DirectionSendRecv
 	}
 }
 
@@ -306,7 +321,8 @@ func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption)
 		return nil, nil, ErrNoCommonCrypto
 	}
 
-	mediaDesc := AnswerMedia(rtpListenerPort, audio, sprof)
+	dir := mirror(d.MediaDesc.Direction)
+	mediaDesc := AnswerMedia(rtpListenerPort, audio, sprof, dir)
 	answer := sdp.SessionDescription{
 		Version: 0,
 		Origin: sdp.Origin{
@@ -402,7 +418,7 @@ func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, s
 	}
 	addrStr := local.Addr().String()
 	portVal := int(local.Port())
-	mediaDesc := AnswerMedia(portVal, audio, sprof)
+	mediaDesc := AnswerMedia(portVal, audio, sprof, sdp.DirectionSendRecv)
 	s := &sdp.SessionDescription{
 		Version: 0,
 		Origin: sdp.Origin{
