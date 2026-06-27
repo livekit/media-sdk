@@ -119,7 +119,7 @@ func appendCryptoProfiles(attrs []sdp.Attribute, profiles []srtp.Profile) []sdp.
 }
 
 // OfferMediaWith creates a new SDP media description with a given codec set, public IP address and listening port.
-func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
+func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption, dir sdp.Direction) (MediaDesc, *sdp.MediaDescription, error) {
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
 
@@ -153,9 +153,12 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 		attrs = appendCryptoProfiles(attrs, cryptoProfiles)
 	}
 
+	if dir == 0 {
+		dir = sdp.DirectionSendRecv
+	}
 	attrs = append(attrs, []sdp.Attribute{
 		{Key: "ptime", Value: "20"},
-		{Key: "sendrecv"},
+		{Key: dir.String()},
 	}...)
 
 	proto := "AVP"
@@ -182,7 +185,7 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 //
 // Deprecated: use OfferMediaWith
 func OfferMedia(rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
-	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted)
+	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted, sdp.DirectionSendRecv)
 }
 
 // AnswerMedia creates a new SDP media description for an answer.
@@ -207,6 +210,9 @@ func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile, d
 	if crypt != nil {
 		proto = "SAVP"
 		attrs = appendCryptoProfiles(attrs, []srtp.Profile{*crypt})
+	}
+	if dir == 0 {
+		dir = sdp.DirectionSendRecv
 	}
 	attrs = append(attrs, []sdp.Attribute{
 		{Key: "ptime", Value: "20"},
@@ -252,7 +258,7 @@ type Answer Description
 func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
 	sessId := rand.Uint64() // TODO: do we need to track these?
 
-	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted)
+	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted, sdp.DirectionSendRecv)
 	if err != nil {
 		return nil, err
 	}

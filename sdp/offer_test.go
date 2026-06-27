@@ -48,7 +48,7 @@ func TestSDPMediaOffer(t *testing.T) {
 	g := media.GlobalCodecs()
 
 	const port = 12345
-	_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+	_, offer, err := OfferMediaWith(g, port, EncryptionNone, 0)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -68,7 +68,7 @@ func TestSDPMediaOffer(t *testing.T) {
 		},
 	}, offer)
 
-	_, offer, err = OfferMediaWith(g, port, EncryptionRequire)
+	_, offer, err = OfferMediaWith(g, port, EncryptionRequire, 0)
 	require.NoError(t, err)
 	i := slices.IndexFunc(offer.Attributes, func(a sdp.Attribute) bool {
 		return a.Key == "crypto"
@@ -99,7 +99,7 @@ func TestSDPMediaOffer(t *testing.T) {
 	noG722 := g.NewSet()
 	noG722.SetEnabled(g722.SDPNameAndRate, false)
 
-	_, offer, err = OfferMediaWith(noG722, port, EncryptionNone)
+	_, offer, err = OfferMediaWith(noG722, port, EncryptionNone, 0)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -326,7 +326,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 			require.Equal(t, c.exp, got)
 		})
 	}
-	_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+	_, offer, err := OfferMediaWith(g, port, EncryptionNone, 0)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
