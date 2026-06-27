@@ -48,7 +48,7 @@ func TestSDPMediaOffer(t *testing.T) {
 	g := media.GlobalCodecs()
 
 	const port = 12345
-	_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+	_, offer, err := OfferMediaWith(g, port, EncryptionNone, 0)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -68,7 +68,7 @@ func TestSDPMediaOffer(t *testing.T) {
 		},
 	}, offer)
 
-	_, offer, err = OfferMediaWith(g, port, EncryptionRequire)
+	_, offer, err = OfferMediaWith(g, port, EncryptionRequire, 0)
 	require.NoError(t, err)
 	i := slices.IndexFunc(offer.Attributes, func(a sdp.Attribute) bool {
 		return a.Key == "crypto"
@@ -99,7 +99,7 @@ func TestSDPMediaOffer(t *testing.T) {
 	noG722 := g.NewSet()
 	noG722.SetEnabled(g722.SDPNameAndRate, false)
 
-	_, offer, err = OfferMediaWith(noG722, port, EncryptionNone)
+	_, offer, err = OfferMediaWith(noG722, port, EncryptionNone, 0)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -326,7 +326,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 			require.Equal(t, c.exp, got)
 		})
 	}
-	_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+	_, offer, err := OfferMediaWith(g, port, EncryptionNone, 0)
 	require.NoError(t, err)
 	require.Equal(t, &sdp.MediaDescription{
 		MediaName: sdp.MediaName{
@@ -878,4 +878,52 @@ a=inactive
 			require.Equal(t, test.want, d.Direction)
 		})
 	}
+}
+
+func TestAnswerMirrorsDirection(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	const offer = `v=0
+o=- 1 1 IN IP4 203.0.113.5
+s=LiveKit
+c=IN IP4 203.0.113.5
+t=0 0
+m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+`
+
+	tests := []struct {
+		name string
+		dir  string        // direction in the offer
+		want sdp.Direction // expected mirrored direction in the answer
+	}{
+		{name: "sendonly mirrors to recvonly", dir: "a=sendonly\n", want: sdp.DirectionRecvOnly},
+		{name: "recvonly mirrors to sendonly", dir: "a=recvonly\n", want: sdp.DirectionSendOnly},
+		{name: "inactive stays inactive", dir: "a=inactive\n", want: sdp.DirectionInactive},
+		{name: "sendrecv stays sendrecv", dir: "a=sendrecv\n", want: sdp.DirectionSendRecv},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			o, err := ParseOfferWith(g, []byte(offer+test.dir))
+			require.NoError(t, err)
+
+			answer, _, err := o.Answer(netip.MustParseAddr("203.0.113.9"), 20000, EncryptionNone)
+			require.NoError(t, err)
+			
+			require.Equal(t, test.want, answerDirection(t, answer.SDP.MediaDescriptions[0]))
+		})
+	}
+}
+
+// answerDirection returns the direction attribute set on a media description.
+func answerDirection(t *testing.T, m *sdp.MediaDescription) sdp.Direction {
+	t.Helper()
+	for _, a := range m.Attributes {
+		if dir, err := sdp.NewDirection(a.Key); err == nil {
+			return dir
+		}
+	}
+	t.Fatal("no direction attribute in answer")
+	return 0
 }
