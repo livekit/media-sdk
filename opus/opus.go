@@ -64,10 +64,46 @@ func Decode(w media.PCM16Writer, targetChannels int, logger logger.Logger) (Writ
 	}, nil
 }
 
+// EncodeOptions tunes the Opus encoder. Zero values keep libopus defaults.
+type EncodeOptions struct {
+	// Bitrate is the target encoder bitrate in bits/sec (e.g. 24000). 0 = auto.
+	Bitrate int
+	// Complexity is the encoder computational complexity 1-10. 0 = default.
+	Complexity int
+	// FEC enables in-band Forward Error Correction.
+	FEC bool
+	// PacketLossPercent is the expected packet loss 0-100, used to tune FEC.
+	PacketLossPercent int
+}
+
 func Encode(w Writer, channels int, logger logger.Logger) (media.PCM16Writer, error) {
+	return EncodeWith(w, channels, EncodeOptions{}, logger)
+}
+
+func EncodeWith(w Writer, channels int, opts EncodeOptions, logger logger.Logger) (media.PCM16Writer, error) {
 	enc, err := opus.NewEncoder(w.SampleRate(), channels, opus.AppVoIP)
 	if err != nil {
 		return nil, err
+	}
+	if opts.Bitrate > 0 {
+		if err = enc.SetBitrate(opts.Bitrate); err != nil {
+			return nil, fmt.Errorf("opus set bitrate: %w", err)
+		}
+	}
+	if opts.Complexity > 0 {
+		if err = enc.SetComplexity(opts.Complexity); err != nil {
+			return nil, fmt.Errorf("opus set complexity: %w", err)
+		}
+	}
+	if opts.FEC {
+		if err = enc.SetInBandFEC(true); err != nil {
+			return nil, fmt.Errorf("opus set fec: %w", err)
+		}
+		if opts.PacketLossPercent > 0 {
+			if err = enc.SetPacketLossPerc(opts.PacketLossPercent); err != nil {
+				return nil, fmt.Errorf("opus set packet loss: %w", err)
+			}
+		}
 	}
 	return &encoder{
 		w:      w,
