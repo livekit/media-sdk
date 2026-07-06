@@ -571,8 +571,14 @@ func parseMKI(s string) ([]byte, error) {
 
 func parseSRTPProfile(val string) (*srtp.Profile, error) {
 	val = strings.TrimSpace(val)
-	sub := strings.SplitN(val, " ", 3)
+	// Parses RFC 4568 crypto lines: a=crypto:<tag> <crypto-suite> <key-params> [<session-params>]
+	// Example: a=crypto:2 AES_CM_128_HMAC_SHA1_80 inline:j/...UX|2^48 UNENCRYPTED_SRTCP FEC_ORDER=FEC_SRTP_BEFORE_SRTCP
+	//
+	// We look at the space-separated fields after the tag. LiveKit only uses the first 3 parameters,
+	// but we need to split into 4 parts to isolate the trailing [<session-params>] from the <key-params>.
+	sub := strings.SplitN(val, " ", 4)
 	if len(sub) != 3 {
+		// Livekit can not deal with the session-params, ignore
 		return nil, nil // ignore
 	}
 	sind, prof, skey := sub[0], srtp.ProtectionProfile(sub[1]), sub[2]
