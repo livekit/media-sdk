@@ -51,6 +51,85 @@ func (s Sample) CopyTo(dst []byte) (int, error) {
 
 type Writer = media.WriteCloser[Sample]
 
+const (
+	SDPNameOnly    = "opus"
+	SDPNameAndRate = SDPNameOnly + "/48000/2"
+	SDPName        = SDPNameAndRate // Deprecated: use SDPNameOnly or SDPNameAndRate
+	SampleRate     = 48000
+)
+
+// init registers Opus as a SIP/SDP codec so it can be offered and negotiated on
+// the RTP (telephone) leg, not only the internal WebRTC leg. Mono, 48 kHz,
+// dynamic payload type. The RTP media path is fully generic (rtp.EncodePCM /
+// rtp.DecodePCM drive CodecInfo + AudioCodec), so registration is all that is
+// needed for end-to-end use.
+func init() {
+	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
+		SDPName:      SDPNameAndRate,
+		SampleRate:   SampleRate,
+		RTPClockRate: SampleRate,
+		RTPIsStatic:  false,
+		Priority:     100,
+		FileExt:      "opus",
+	}, sipDecode, sipEncode))
+}
+
+// sipDecode decodes Opus RTP payloads to mono PCM16 for the SIP leg.
+func sipDecode(w media.PCM16Writer) media.WriteCloser[Sample] {
+	d, err := Decode(w, 1, logger.GetLogger())
+	if err != nil {
+		logger.GetLogger().Errorw("opus SIP decoder init failed", err)
+		return failWriter[Sample]{err: err, sr: w.SampleRate()}
+	}
+	return d
+}
+
+// sipEncode encodes mono PCM16 to Opus for the SIP leg, tuned for telephony:
+// a generous bitrate + max complexity for a rich voice, plus inband FEC with a
+// packet-loss estimate so cellular handoffs degrade gracefully. Kept separate
+// from Encode so the WebRTC leg, which runs its own bandwidth estimation, is
+// untouched. Setter errors are non-fatal (encoder keeps library defaults).
+func sipEncode(w Writer) media.PCM16Writer {
+	enc, err := opus.NewEncoder(w.SampleRate(), 1, opus.AppVoIP)
+	if err != nil {
+		logger.GetLogger().Errorw("opus SIP encoder init failed", err)
+		return failWriter[media.PCM16Sample]{err: err, sr: w.SampleRate()}
+	}
+	lg := logger.GetLogger()
+	for _, set := range []struct {
+		name string
+		fn   func() error
+	}{
+		{"bitrate", func() error { return enc.SetBitrate(64000) }},
+		{"complexity", func() error { return enc.SetComplexity(10) }},
+		{"fec", func() error { return enc.SetInBandFEC(true) }},
+		{"loss", func() error { return enc.SetPacketLossPerc(10) }},
+	} {
+		if err := set.fn(); err != nil {
+			lg.Warnw("opus SIP encoder tuning failed", err, "param", set.name)
+		}
+	}
+	return &encoder{
+		w:      w,
+		enc:    enc,
+		buf:    make(Sample, w.SampleRate()/rtp.DefFramesPerSec),
+		logger: lg,
+	}
+}
+
+// failWriter is a fail-closed sink returned when per-call codec init fails, so a
+// single bad call surfaces an error downstream instead of panicking the daemon.
+type failWriter[T any] struct {
+	err error
+	sr  int
+}
+
+func (f failWriter[T]) String() string     { return "opus(init-failed)" }
+func (f failWriter[T]) SampleRate() int     { return f.sr }
+func (f failWriter[T]) WriteSample(T) error { return f.err }
+func (f failWriter[T]) Close() error        { return f.err }
+
+
 func Decode(w media.PCM16Writer, targetChannels int, logger logger.Logger) (Writer, error) {
 	if targetChannels != 1 && targetChannels != 2 {
 		return nil, fmt.Errorf("opus decoder only supports mono or stereo output")
