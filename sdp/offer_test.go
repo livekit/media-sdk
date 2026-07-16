@@ -612,6 +612,56 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMg
 	require.Equal(t, 4, len(profile.MKI), "MKI length should be 4 bytes")
 }
 
+// TestParseOfferSRTPSessionParams verifies that crypto lines carrying RFC 4568
+// session parameters (which we don't support, e.g. UNENCRYPTED_SRTCP) are
+// skipped rather than misparsed, while other offered ciphers are still
+// accepted.
+func TestParseOfferSRTPSessionParams(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	const header = `v=0
+o=Test 1 1 IN IP4 127.0.0.1
+s=Stream1
+t=0 0
+m=audio 5000 RTP/SAVP 0 101
+c=IN IP4 127.0.0.1
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=sendrecv
+a=ptime:20
+`
+
+	t.Run("AcceptsOther", func(t *testing.T) {
+		sdpData := header +
+			"a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1|2^48 UNENCRYPTED_SRTCP \n" +
+			"a=crypto:2 AES_CM_128_HMAC_SHA1_32 inline:ZKkTQfuCsliegVZtFSya3Z6oEVUtSwjGCfHlbrMf \n"
+
+		offer, err := ParseOfferWith(g, []byte(sdpData))
+		require.NoError(t, err)
+		require.Len(t, offer.CryptoProfiles, 1, "only the plain crypto line should be accepted")
+		require.Equal(t, 2, offer.CryptoProfiles[0].Index)
+		require.Equal(t, srtp.ProtectionProfile("AES_CM_128_HMAC_SHA1_32"), offer.CryptoProfiles[0].Profile)
+
+		// The surviving cipher is usable for a required-encryption answer.
+		_, conf, err := offer.Answer(netip.MustParseAddr("127.0.0.1"), 5001, EncryptionRequire)
+		require.NoError(t, err)
+		require.NotNil(t, conf.Crypto)
+	})
+
+	t.Run("RejectAll", func(t *testing.T) {
+		sdpData := header +
+			"a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1|2^48 UNENCRYPTED_SRTCP \n" +
+			"a=crypto:2 AES_CM_128_HMAC_SHA1_32 inline:ZKkTQfuCsliegVZtFSya3Z6oEVUtSwjGCfHlbrMf KDR=1 \n"
+
+		offer, err := ParseOfferWith(g, []byte(sdpData))
+		require.NoError(t, err)
+		require.Empty(t, offer.CryptoProfiles, "no cipher should survive session-param filtering")
+
+		_, _, err = offer.Answer(netip.MustParseAddr("127.0.0.1"), 5001, EncryptionRequire)
+		require.Error(t, err)
+	})
+}
+
 // TestSelectCryptoSuiteTag ensures that when selecting a crypto suite from an offer/answer pair,
 // the answer uses the same crypto suite tag as the offer, per RFC 4568 section 5.1.2 and 5.1.3.
 func TestSelectCryptoSuiteTag(t *testing.T) {

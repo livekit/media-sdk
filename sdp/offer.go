@@ -586,6 +586,10 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 		return nil, nil // ignore
 	}
 
+	if strings.ContainsAny(skey, " \t") {
+		return nil, nil // RFC 4568 session-parameter list not supported; ignore
+	}
+
 	// Split by '|' per RFC 4568 6.1
 	parts := strings.Split(skey, "|")
 	keyMaterial := parts[0] // First part is always the base64-encoded key+salt
