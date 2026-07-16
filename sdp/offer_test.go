@@ -615,7 +615,7 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMg
 // TestParseOfferSRTPSessionParams verifies that crypto lines carrying RFC 4568
 // session parameters (which we don't support, e.g. UNENCRYPTED_SRTCP) are
 // skipped rather than misparsed, while other offered ciphers are still
-// accepted. See TEL-792.
+// accepted.
 func TestParseOfferSRTPSessionParams(t *testing.T) {
 	g := media.GlobalCodecs()
 
