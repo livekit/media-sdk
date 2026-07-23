@@ -625,6 +625,9 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 		if err != nil {
 			return nil, err
 		}
+		if keyLen > len(keys) {
+			return nil, fmt.Errorf("parsed key length is greater than key buffer size: keyLen: %d; len(keys): %d", keyLen, len(keys))
+		}
 		keys, salt = keys[:keyLen], keys[keyLen:]
 	}
 	return &srtp.Profile{
