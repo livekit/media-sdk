@@ -61,12 +61,11 @@ func OfferCodecsWith(s *media.CodecSet) []CodecInfo {
 	codecs := s.ListEnabled()
 	slices.SortFunc(codecs, func(a, b media.Codec) int {
 		ai, bi := a.Info(), b.Info()
-		if ai.RTPIsStatic != bi.RTPIsStatic {
-			if ai.RTPIsStatic {
-				return -1
-			} else if bi.RTPIsStatic {
-				return 1
+		if ai.Priority == bi.Priority {
+			if ai.SampleRate != bi.SampleRate {
+				return bi.SampleRate - ai.SampleRate
 			}
+			return strings.Compare(ai.SDPName, bi.SDPName)
 		}
 		return bi.Priority - ai.Priority
 	})
@@ -128,15 +127,22 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 	formats := make([]string, 0, len(codecs))
 	dtmfType := byte(0)
 	for _, codec := range codecs {
-		if codec.Codec.Info().SDPName == dtmf.SDPNameAndRate {
+		ci := codec.Codec.Info()
+		if ci.SDPName == dtmf.SDPNameAndRate {
 			dtmfType = codec.Type
 		}
 		styp := strconv.Itoa(int(codec.Type))
 		formats = append(formats, styp)
 		attrs = append(attrs, sdp.Attribute{
 			Key:   "rtpmap",
-			Value: styp + " " + codec.Codec.Info().SDPName,
+			Value: styp + " " + ci.SDPName,
 		})
+		if len(ci.ReqParams) != 0 {
+			attrs = append(attrs, sdp.Attribute{
+				Key:   "fmtp",
+				Value: styp + " " + ci.ReqParams.String(),
+			})
+		}
 	}
 	if dtmfType > 0 {
 		attrs = append(attrs, sdp.Attribute{
@@ -190,10 +196,16 @@ func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
 
-	attrs := make([]sdp.Attribute, 0, 6)
+	attrs := make([]sdp.Attribute, 0, 7)
+	ac := audio.Codec.Info()
 	attrs = append(attrs, sdp.Attribute{
-		Key: "rtpmap", Value: fmt.Sprintf("%d %s", audio.Type, audio.Codec.Info().SDPName),
+		Key: "rtpmap", Value: fmt.Sprintf("%d %s", audio.Type, ac.SDPName),
 	})
+	if len(ac.ReqParams) != 0 {
+		attrs = append(attrs, sdp.Attribute{
+			Key: "fmtp", Value: fmt.Sprintf("%d %s", audio.Type, ac.ReqParams.String()),
+		})
+	}
 	formats := make([]string, 0, 2)
 	formats = append(formats, strconv.Itoa(int(audio.Type)))
 	if audio.DTMFType != 0 {
@@ -642,7 +654,25 @@ func parseSRTPProfile(val string) (*srtp.Profile, error) {
 
 // ParseMediaWith parses SDP media description based on the given codec set.
 func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, error) {
-	var out MediaDesc
+	type codecInfo struct {
+		Type   int
+		Name   string
+		Params media.CodecParams
+	}
+	var (
+		out    MediaDesc
+		codecs []*codecInfo
+	)
+	getCodec := func(typ int) *codecInfo {
+		for _, c := range codecs {
+			if c.Type == typ {
+				return c
+			}
+		}
+		c := &codecInfo{Type: typ}
+		codecs = append(codecs, c)
+		return c
+	}
 	for _, m := range d.Attributes {
 		switch m.Key {
 		case "rtpmap":
@@ -659,11 +689,26 @@ func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, err
 				out.DTMFType = byte(typ)
 				continue
 			}
-			codec, _ := CodecByNameWith(s, name).(media.AudioCodec)
-			out.Codecs = append(out.Codecs, CodecInfo{
-				Type:  byte(typ),
-				Codec: codec,
-			})
+			c := getCodec(typ)
+			c.Name = name
+		case "fmtp":
+			sub := strings.SplitN(m.Value, " ", 2)
+			if len(sub) != 2 {
+				continue
+			}
+			typ, err := strconv.Atoi(sub[0])
+			if err != nil {
+				continue
+			}
+			c := getCodec(typ)
+			for _, par := range strings.Split(sub[1], ";") {
+				p := media.CodecParam{Key: par}
+				if i := strings.IndexByte(par, '='); i >= 0 {
+					p.Key = par[:i]
+					p.Val = par[i+1:]
+				}
+				c.Params = append(c.Params, p)
+			}
 		case "crypto":
 			p, err := parseSRTPProfile(m.Value)
 			if err != nil {
@@ -685,12 +730,21 @@ func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, err
 		if err != nil {
 			continue
 		}
-		codec, _ := rtp.CodecByPayloadType(byte(typ)).(media.AudioCodec)
-		if !s.IsEnabled(codec) {
-			codec = nil
+		c := getCodec(typ)
+		_ = c // just add
+	}
+	for _, ci := range codecs {
+		var codec media.AudioCodec
+		if ci.Name != "" {
+			codec, _ = CodecByNameWith(s, ci.Name, ci.Params).(media.AudioCodec)
+		} else {
+			codec, _ = rtp.CodecByPayloadType(byte(ci.Type)).(media.AudioCodec)
+			if !s.IsEnabled(codec) {
+				codec = nil
+			}
 		}
 		out.Codecs = append(out.Codecs, CodecInfo{
-			Type:  byte(typ),
+			Type:  byte(ci.Type),
 			Codec: codec,
 		})
 	}
