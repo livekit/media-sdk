@@ -39,13 +39,18 @@ func init() {
 
 // CodecByNameWith finds the codec with a given SDP name.
 // If the codec is not found or disabled in the codec set, it returns nil.
-func CodecByNameWith(s *media.CodecSet, name string) media.Codec {
+func CodecByNameWith(s *media.CodecSet, name string, params media.CodecParams) media.Codec {
 	if s == nil {
 		s = media.GlobalCodecs()
 	}
 	c := codecByName[strings.ToLower(name)]
 	if !s.IsEnabled(c) {
 		return nil
+	}
+	for _, p := range c.Info().ReqParams {
+		if val, ok := params.Get(p.Key); ok && val != p.Val {
+			return nil
+		}
 	}
 	return c
 }
@@ -54,5 +59,5 @@ func CodecByNameWith(s *media.CodecSet, name string) media.Codec {
 //
 // Deprecated: use CodecByNameWith
 func CodecByName(name string) media.Codec {
-	return CodecByNameWith(media.GlobalCodecs(), name)
+	return CodecByNameWith(media.GlobalCodecs(), name, nil)
 }

@@ -19,16 +19,72 @@ import (
 	"strings"
 )
 
+type CodecParams []CodecParam
+
+func (arr CodecParams) String() string {
+	params := make([]string, 0, len(arr))
+	for _, p := range arr {
+		params = append(params, p.String())
+	}
+	return strings.Join(params, ";")
+}
+
+func (arr CodecParams) Get(key string) (string, bool) {
+	for _, p := range arr {
+		if p.Key == key {
+			return p.Val, true
+		}
+	}
+	return "", false
+}
+func (arr CodecParams) Has(key string) bool {
+	for _, p := range arr {
+		if p.Key == key {
+			return true
+		}
+	}
+	return false
+}
+func (arr CodecParams) HasValue(key, val string) bool {
+	for _, p := range arr {
+		if p.Key == key {
+			return p.Val == val
+		}
+	}
+	return false
+}
+func (arr CodecParams) HasParam(p2 CodecParam) bool {
+	for _, p := range arr {
+		if p.Key == p2.Key {
+			return p.Val == p2.Val
+		}
+	}
+	return false
+}
+
+type CodecParam struct {
+	Key string
+	Val string
+}
+
+func (p CodecParam) String() string {
+	if p.Val == "" {
+		return p.Key
+	}
+	return p.Key + "=" + p.Val
+}
+
 type CodecInfo struct {
 	SDPName      string
 	SampleRate   int
 	RTPClockRate int
 	RTPDefType   byte
 	RTPIsStatic  bool
-	Priority     int
+	Priority     int  // higher is preferable
 	Disabled     bool // codec is disabled in GlobalCodecs by default
 	Hidden       bool // codec should not appear in SDP offer, but can be used in the answer
 	FileExt      string
+	ReqParams    CodecParams // a list of required codec params (fmtp)
 }
 
 type Codec interface {
