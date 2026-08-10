@@ -85,9 +85,8 @@ func NewSwitchWriter(sampleRate int) *SwitchWriter {
 }
 
 type SwitchWriter struct {
-	ptr        atomic.Pointer[PCM16Writer]
-	sampleRate atomic.Int32
-	disabled   atomic.Bool
+	WriteCloserSwitch[PCM16Sample]
+	disabled atomic.Bool
 }
 
 func (s *SwitchWriter) Enable() {
@@ -99,29 +98,26 @@ func (s *SwitchWriter) Disable() {
 }
 
 func (s *SwitchWriter) Get() PCM16Writer {
-	ptr := s.ptr.Load()
+	ptr := s.WriteCloserSwitch.Get()
 	if ptr == nil {
-		return nil
+		return nil // Untyped nil
 	}
-	return *ptr
+	return ptr
 }
 
 // Swap sets an underlying writer and returns the old one.
 // Caller is responsible for closing the old writer.
 func (s *SwitchWriter) Swap(w PCM16Writer) PCM16Writer {
-	var old *PCM16Writer
-	if w == nil {
-		old = s.ptr.Swap(nil)
-	} else {
+	if w != nil {
 		if rate := s.SampleRate(); rate != w.SampleRate() {
 			w = ResampleWriter(w, rate)
 		}
-		old = s.ptr.Swap(&w)
 	}
+	old := s.WriteCloserSwitch.Swap(w)
 	if old == nil {
-		return nil
+		return nil // Untyped nil
 	}
-	return *old
+	return old
 }
 
 func (s *SwitchWriter) String() string {
@@ -135,14 +131,14 @@ func (s *SwitchWriter) SetSampleRate(rate int) {
 	if rate <= 0 {
 		panic("invalid sample rate")
 	}
-	if !s.sampleRate.CompareAndSwap(-1, int32(rate)) {
+	if !s.WriteCloserSwitch.sampleRate.CompareAndSwap(-1, int32(rate)) {
 		panic("sample rate can only be changed once")
 	}
 }
 
 // SampleRate returns an expected sample rate for this writer. It panics if the sample rate is not specified.
 func (s *SwitchWriter) SampleRate() int {
-	rate := int(s.sampleRate.Load())
+	rate := s.WriteCloserSwitch.SampleRate()
 	if rate == 0 {
 		panic("switch writer not initialized")
 	} else if rate < 0 {
@@ -151,23 +147,73 @@ func (s *SwitchWriter) SampleRate() int {
 	return rate
 }
 
-func (s *SwitchWriter) Close() error {
-	ptr := s.ptr.Swap(nil)
-	if ptr == nil {
-		return nil
-	}
-	return (*ptr).Close()
-}
-
 func (s *SwitchWriter) WriteSample(sample PCM16Sample) error {
 	if s.disabled.Load() {
 		return nil
 	}
-	w := s.Get()
+	return s.WriteCloserSwitch.WriteSample(sample)
+}
+
+type WriteCloserSwitch[T any] struct { // msdk.WriteCloser[T]
+	sampleRate atomic.Int32 // Prevents changing sample rate after the switch is created
+	w          atomic.Pointer[WriteCloser[T]]
+}
+
+func (s *WriteCloserSwitch[T]) String() string {
+	w := s.w.Load()
+	if w == nil {
+		return "Switch(nil)"
+	}
+	return fmt.Sprintf("Switch(%d) -> %v", s.SampleRate(), *w)
+}
+
+func (s *WriteCloserSwitch[T]) SampleRate() int {
+	if rate := s.sampleRate.Load(); rate > 0 {
+		return int(rate)
+	}
+	return -1
+}
+
+func (s *WriteCloserSwitch[T]) WriteSample(sample T) error {
+	w := s.w.Load()
 	if w == nil {
 		return nil
 	}
-	return w.WriteSample(sample)
+	return (*w).WriteSample(sample)
+}
+
+func (s *WriteCloserSwitch[T]) Close() error {
+	w := s.w.Load()
+	if w == nil {
+		return nil
+	}
+	return (*w).Close()
+}
+
+func (s *WriteCloserSwitch[T]) Get() WriteCloser[T] {
+	ptr := s.w.Load()
+	if ptr == nil {
+		return nil
+	}
+	return *ptr
+}
+
+func (s *WriteCloserSwitch[T]) Swap(w WriteCloser[T]) WriteCloser[T] {
+	var old *WriteCloser[T]
+	if w != nil {
+		newRate := int32(w.SampleRate())
+		oldRate := s.sampleRate.Swap(newRate)
+		if oldRate > 0 && oldRate != newRate {
+			panic(fmt.Sprintf("sample rate mismatch: expected %d, actual %d", newRate, oldRate))
+		}
+		old = s.w.Swap(&w)
+	} else {
+		old = s.w.Swap(nil)
+	}
+	if old == nil {
+		return nil
+	}
+	return *old
 }
 
 type MultiWriter[T any] []WriteCloser[T]
