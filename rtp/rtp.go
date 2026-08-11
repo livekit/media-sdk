@@ -88,11 +88,7 @@ func NewNopCloser(h Handler) HandlerCloser {
 	return nopCloser{h}
 }
 
-func (n nopCloser) Close() {
-	if closer, ok := n.Handler.(HandlerCloser); ok {
-		closer.Close()
-	}
-}
+func (nopCloser) Close() {}
 
 // Buffer is a Writer that clones and appends RTP packets into a slice.
 type Buffer []*Packet
