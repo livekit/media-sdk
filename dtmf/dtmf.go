@@ -132,6 +132,13 @@ var eventToChar = [16]byte{
 	codeA: 'a', codeB: 'b', codeC: 'c', codeD: 'd',
 }
 
+func CodeToChar(code byte) byte {
+	if int(code) < len(eventToChar) {
+		return eventToChar[code]
+	}
+	return 0
+}
+
 var charToEvent = map[byte]byte{
 	'0': code0, '1': code1, '2': code2, '3': code3, '4': code4,
 	'5': code5, '6': code6, '7': code7, '8': code8, '9': code9,
