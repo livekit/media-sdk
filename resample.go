@@ -61,26 +61,37 @@ func WithResampleDump(inputName, outputName string) ResampleOption {
 	}
 }
 
+func WithDstSampleRate(sampleRate int) ResampleOption {
+	return func(opts *resampleOptions) {
+		opts.DstSampleRate = sampleRate
+	}
+}
+
 type resampleOptions struct {
-	Predictable bool
-	DumpInput   string
-	DumpOutput  string
+	DstSampleRate int
+	Predictable   bool
+	DumpInput     string
+	DumpOutput    string
 }
 
 // ResampleWriter returns a new writer that expects samples of a given sample rate
 // and resamples then for the destination writer.
 func ResampleWriter(w PCM16Writer, sampleRate int, opts ...ResampleOption) (w2 PCM16Writer) {
-	srcRate := sampleRate
-	dstRate := w.SampleRate()
-	if dstRate == srcRate {
-		return w
-	}
 	if len(opts) == 0 {
 		opts = DefaultResampleOptions
 	}
 	var opt resampleOptions
 	for _, o := range opts {
 		o(&opt)
+	}
+
+	srcRate := sampleRate
+	dstRate := opt.DstSampleRate
+	if dstRate <= 0 {
+		dstRate = w.SampleRate()
+	}
+	if dstRate == srcRate {
+		return w
 	}
 
 	if resampleDumpToFile {
