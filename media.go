@@ -154,6 +154,10 @@ func (s *SwitchWriter) WriteSample(sample PCM16Sample) error {
 	return s.WriteCloserSwitch.WriteSample(sample)
 }
 
+func (s *SwitchWriter) Close() error {
+	return s.WriteCloserSwitch.Close()
+}
+
 type WriteCloserSwitch[T any] struct { // msdk.WriteCloser[T]
 	sampleRate atomic.Int32 // Prevents changing sample rate after the switch is created
 	w          atomic.Pointer[WriteCloser[T]]
