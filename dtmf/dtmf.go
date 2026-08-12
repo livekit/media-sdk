@@ -132,6 +132,8 @@ var eventToChar = [16]byte{
 	codeA: 'a', codeB: 'b', codeC: 'c', codeD: 'd',
 }
 
+// CodeToChar converts a DTMF event code to its character representation.
+// It returns 0 for unknown codes.
 func CodeToChar(code byte) byte {
 	if int(code) < len(eventToChar) {
 		return eventToChar[code]

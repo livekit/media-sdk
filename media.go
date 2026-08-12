@@ -154,6 +154,10 @@ func (s *SwitchWriter) WriteSample(sample PCM16Sample) error {
 	return s.WriteCloserSwitch.WriteSample(sample)
 }
 
+// NewWriteCloserSwitch creates a switch that expects writers with the given sample rate.
+// If a positive sample rate is provided, it is locked in at the start.
+// If a zero or negative sample rate is provided, the real rate will be taken
+// from the first downstream writer, and locked to that rate at that time.
 func NewWriteCloserSwitch[T any](sampleRate int) *WriteCloserSwitch[T] {
 	s := &WriteCloserSwitch[T]{}
 	if sampleRate > 0 {
@@ -162,6 +166,9 @@ func NewWriteCloserSwitch[T any](sampleRate int) *WriteCloserSwitch[T] {
 	return s
 }
 
+// WriteCloserSwitch is a WriteCloser that forwards samples to an underlying writer,
+// which can be replaced atomically with Swap. Writes are dropped while no writer is attached.
+// All writers must agree on the sample rate.
 type WriteCloserSwitch[T any] struct { // msdk.WriteCloser[T]
 	sampleRate atomic.Int32 // Prevents changing sample rate after the switch is created
 	w          atomic.Pointer[WriteCloser[T]]
@@ -170,11 +177,13 @@ type WriteCloserSwitch[T any] struct { // msdk.WriteCloser[T]
 func (s *WriteCloserSwitch[T]) String() string {
 	w := s.w.Load()
 	if w == nil {
-		return "Switch(nil)"
+		return "WriteCloserSwitch(nil)"
 	}
-	return fmt.Sprintf("Switch(%d) -> %v", s.SampleRate(), *w)
+	return fmt.Sprintf("WriteCloserSwitch(%d) -> %v", s.SampleRate(), *w)
 }
 
+// SampleRate returns the sample rate expected from the underlying writers,
+// or -1 if it is still unset.
 func (s *WriteCloserSwitch[T]) SampleRate() int {
 	if rate := s.sampleRate.Load(); rate > 0 {
 		return int(rate)
@@ -206,13 +215,18 @@ func (s *WriteCloserSwitch[T]) Get() WriteCloser[T] {
 	return *ptr
 }
 
+// Swap sets an underlying writer and returns the old one.
+// Caller is responsible for closing the old writer.
+// If switch sample rate is unset, this locks the sample rate.
+// If sample rate is already locked, and the new writer does not 
+// match it the code panics.
 func (s *WriteCloserSwitch[T]) Swap(w WriteCloser[T]) WriteCloser[T] {
 	var old *WriteCloser[T]
 	if w != nil {
 		newRate := int32(w.SampleRate())
 		oldRate := s.sampleRate.Swap(newRate)
 		if oldRate > 0 && oldRate != newRate {
-			panic(fmt.Sprintf("sample rate mismatch: expected %d, actual %d", newRate, oldRate))
+			panic(fmt.Sprintf("sample rate mismatch: newRate %d, oldRate %d", newRate, oldRate))
 		}
 		old = s.w.Swap(&w)
 	} else {
