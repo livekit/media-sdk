@@ -46,6 +46,9 @@ func init() {
 		Priority:    -4,
 		FileExt:     "amrwb",
 		Disabled:    true,
+		ReqParams: []media.CodecParam{
+			{Key: "octet-align", Val: "0"},
+		},
 	}, func(w media.PCM16Writer) media.WriteCloser[Sample] {
 		return Decode(w, RTPBandwidthEfficient)
 	}, func(w media.WriteCloser[Sample]) media.PCM16Writer {
