@@ -217,9 +217,8 @@ func (s *WriteCloserSwitch[T]) Get() WriteCloser[T] {
 
 // Swap sets an underlying writer and returns the old one.
 // Caller is responsible for closing the old writer.
-// If switch sample rate is unset, this locks the sample rate.
-// If sample rate is already locked, and the new writer does not 
-// match it the code panics.
+// When switch sample rate is unset, it is set to the new writer's sample rate.
+// If sample rate is already set, this method panics on sample rate mismatch.
 func (s *WriteCloserSwitch[T]) Swap(w WriteCloser[T]) WriteCloser[T] {
 	var old *WriteCloser[T]
 	if w != nil {
