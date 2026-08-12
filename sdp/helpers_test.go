@@ -81,6 +81,87 @@ func TestGetAudioDest(t *testing.T) {
 			expected: netip.MustParseAddrPort("1.2.3.4:1234"),
 		},
 		{
+			name: "media level connection info without address",
+			session: &sdp.SessionDescription{
+				ConnectionInformation: &sdp.ConnectionInformation{
+					NetworkType: "IN",
+					AddressType: "IP4",
+					Address:     &sdp.Address{Address: "1.2.3.4"},
+				},
+			},
+			audio: &sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Media: "audio",
+					Port:  sdp.RangedPort{Value: 1234},
+				},
+				ConnectionInformation: &sdp.ConnectionInformation{
+					NetworkType: "IN",
+					AddressType: "IP4",
+				},
+			},
+			expected: netip.MustParseAddrPort("1.2.3.4:1234"),
+		},
+		{
+			name: "connection info without address falls back to origin",
+			session: &sdp.SessionDescription{
+				Origin: sdp.Origin{
+					NetworkType:    "IN",
+					AddressType:    "IP4",
+					UnicastAddress: "5.6.7.8",
+				},
+				ConnectionInformation: &sdp.ConnectionInformation{
+					NetworkType: "IN",
+					AddressType: "IP4",
+				},
+			},
+			audio: &sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Media: "audio",
+					Port:  sdp.RangedPort{Value: 1234},
+				},
+			},
+			expected: netip.MustParseAddrPort("5.6.7.8:1234"),
+		},
+		{
+			name: "non-IN connection info falls back to session level",
+			session: &sdp.SessionDescription{
+				ConnectionInformation: &sdp.ConnectionInformation{
+					NetworkType: "IN",
+					AddressType: "IP4",
+					Address:     &sdp.Address{Address: "1.2.3.4"},
+				},
+			},
+			audio: &sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Media: "audio",
+					Port:  sdp.RangedPort{Value: 1234},
+				},
+				ConnectionInformation: &sdp.ConnectionInformation{
+					NetworkType: "FOO",
+					AddressType: "IP4",
+					Address:     &sdp.Address{Address: "9.9.9.9"},
+				},
+			},
+			expected: netip.MustParseAddrPort("1.2.3.4:1234"),
+		},
+		{
+			name: "no usable address anywhere",
+			session: &sdp.SessionDescription{
+				ConnectionInformation: &sdp.ConnectionInformation{
+					NetworkType: "IN",
+					AddressType: "IP4",
+				},
+			},
+			audio: &sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Media: "audio",
+					Port:  sdp.RangedPort{Value: 1234},
+				},
+			},
+			expected: netip.AddrPort{},
+			error:    true,
+		},
+		{
 			name:     "nil session",
 			session:  nil,
 			audio:    &sdp.MediaDescription{},

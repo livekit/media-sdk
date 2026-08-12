@@ -529,6 +529,55 @@ a=sendrecv
 `,
 			wantErr: true,
 		},
+		{
+			// The media-level c= has no address, so the session-level one is used.
+			name: "media level c= without address",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4 1.2.3.4
+s=LiveKit
+c=IN IP4 1.2.3.4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+c=IN IP4
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: false,
+		},
+		{
+			name: "session level c= without address falls back to o=",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4 1.2.3.4
+s=LiveKit
+c=IN IP4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: false,
+		},
+		{
+			// Neither c= nor o= carries an address. pion defaults the o= address
+			// to 0.0.0.0, so this parses rather than failing.
+			name: "no address in c= or o=",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4
+s=LiveKit
+c=IN IP4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, test := range tests {
@@ -541,6 +590,29 @@ a=sendrecv
 			}
 		})
 	}
+}
+
+// An unusable media-level c= must fall through to the session-level c=, not all
+// the way to o=.
+func TestParseOfferConnectionAddressFallback(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	const sdpData = `v=0
+o=- 1234567890 1234567890 IN IP4 5.6.7.8
+s=LiveKit
+c=IN IP4 1.2.3.4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+c=IN IP4
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`
+
+	offer, err := ParseOfferWith(g, []byte(sdpData))
+	require.NoError(t, err)
+	require.Equal(t, netip.MustParseAddrPort("1.2.3.4:1234"), offer.Addr)
 }
 
 func TestParseOfferSRTP(t *testing.T) {
