@@ -38,15 +38,21 @@ func GetAudioDest(s *sdp.SessionDescription, audio *sdp.MediaDescription) (netip
 		return netip.AddrPort{}, errors.New("no audio in sdp")
 	}
 
-	// pick media-level c=; if absent, fall back to session-level c=
-	ci := audio.ConnectionInformation
-	if ci == nil {
-		ci = s.ConnectionInformation
+	// A c= line without an address parses to a non-nil ConnectionInformation
+	// with a nil Address, so it has to be checked separately.
+	connAddr := func(ci *sdp.ConnectionInformation) string {
+		if ci == nil || ci.NetworkType != "IN" || ci.Address == nil {
+			return ""
+		}
+		return ci.Address.Address
 	}
-	var addr string
-	if ci != nil && ci.NetworkType == "IN" {
-		addr = ci.Address.Address
-	} else if s.Origin.NetworkType == "IN" {
+
+	// pick media-level c=, then session-level c=, then the o= address
+	addr := connAddr(audio.ConnectionInformation)
+	if addr == "" {
+		addr = connAddr(s.ConnectionInformation)
+	}
+	if addr == "" && s.Origin.NetworkType == "IN" {
 		addr = s.Origin.UnicastAddress
 	}
 	if addr == "" {
