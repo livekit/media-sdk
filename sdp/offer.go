@@ -356,10 +356,11 @@ func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption)
 				DTMFType: audio.DTMFType,
 			},
 		}, &MediaConfig{
-			Local:  src,
-			Remote: d.Addr,
-			Audio:  *audio,
-			Crypto: sconf,
+			Local:         src,
+			Remote:        d.Addr,
+			Audio:         *audio,
+			Crypto:        sconf,
+			PeerDirection: d.Direction,
 		}, nil
 }
 
@@ -391,10 +392,11 @@ func (d *Answer) apply(offer *Offer, enc Encryption, generateLocalSDP bool) (*Me
 		return nil, nil, ErrNoCommonCrypto
 	}
 	mc := &MediaConfig{
-		Local:  offer.Addr,
-		Remote: d.Addr,
-		Audio:  *audio,
-		Crypto: sconf,
+		Local:         offer.Addr,
+		Remote:        d.Addr,
+		Audio:         *audio,
+		Crypto:        sconf,
+		PeerDirection: d.Direction,
 	}
 
 	if !generateLocalSDP {
@@ -760,10 +762,11 @@ func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
 
 // MediaConfig is the canonical representation of the negotiated session.
 type MediaConfig struct {
-	Local  netip.AddrPort
-	Remote netip.AddrPort
-	Audio  AudioConfig
-	Crypto *srtp.Config
+	Local         netip.AddrPort
+	Remote        netip.AddrPort
+	Audio         AudioConfig
+	Crypto        *srtp.Config
+	PeerDirection sdp.Direction // RFC 3264, offer direction for server, answer direction for client
 }
 
 type AudioConfig struct {
