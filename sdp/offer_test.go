@@ -1120,3 +1120,66 @@ func TestAnswerWithLocalProfiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, append(slices.Clone(mc1.Crypto.Keys.LocalMasterKey), mc1.Crypto.Keys.LocalMasterSalt...), inline)
 }
+
+func cryptoAttrs(t testing.TB, s *sdp.SessionDescription) []string {
+	t.Helper()
+	audio := GetAudio(s)
+	require.NotNil(t, audio)
+	var out []string
+	for _, a := range audio.Attributes {
+		if a.Key == "crypto" {
+			out = append(out, a.Value)
+		}
+	}
+	require.NotEmpty(t, out)
+	return out
+}
+
+// NewOfferWithOpts must advertise exactly the local key material it was given, so that a
+// re-offer keeps the keys of a running session instead of re-keying the peer.
+func TestNewOfferWithLocalProfiles(t *testing.T) {
+	g := codecSet()
+	ip := netip.MustParseAddr("1.1.1.1")
+
+	local, err := srtp.DefaultProfiles()
+	require.NoError(t, err)
+
+	offer := func(opts *srtp.Options) *Offer {
+		t.Helper()
+		o, err := NewOfferWithOpts(g, ip, 5000, EncryptionRequire, opts)
+		require.NoError(t, err)
+		return o
+	}
+
+	opts := &srtp.Options{Profiles: local}
+	offer1, offer2, offer3 := offer(opts), offer(opts), offer(nil)
+
+	require.Equal(t, local, offer1.CryptoProfiles)
+	require.Equal(t, cryptoAttrs(t, &offer1.SDP), cryptoAttrs(t, &offer2.SDP), "reusing the same profiles must offer the same keys")
+	require.NotEqual(t, cryptoAttrs(t, &offer1.SDP), cryptoAttrs(t, &offer3.SDP), "without options each offer re-keys")
+
+	// Full round trip: the offerer's negotiated local key must survive a re-offer, even
+	// though the answerer picks new keys of its own each time.
+	negotiate := func(o *Offer) *MediaConfig {
+		t.Helper()
+		offerData, err := o.SDP.Marshal()
+		require.NoError(t, err)
+		parsed, err := ParseOfferWith(g, offerData)
+		require.NoError(t, err)
+		answer, _, err := parsed.Answer(netip.MustParseAddr("2.2.2.2"), 5001, EncryptionRequire)
+		require.NoError(t, err)
+		answerData, err := answer.SDP.Marshal()
+		require.NoError(t, err)
+		parsedAnswer, err := ParseAnswerWith(g, answerData)
+		require.NoError(t, err)
+		mc, err := parsedAnswer.Apply(o, EncryptionRequire)
+		require.NoError(t, err)
+		require.NotNil(t, mc.Crypto)
+		return mc
+	}
+
+	mc1, mc2 := negotiate(offer1), negotiate(offer2)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterKey, mc2.Crypto.Keys.LocalMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterSalt, mc2.Crypto.Keys.LocalMasterSalt)
+	require.NotEqual(t, mc1.Crypto.Keys.RemoteMasterKey, mc2.Crypto.Keys.RemoteMasterKey)
+}

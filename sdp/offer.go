@@ -117,8 +117,14 @@ func appendCryptoProfiles(attrs []sdp.Attribute, profiles []srtp.Profile) []sdp.
 	return attrs
 }
 
-// OfferMediaWith creates a new SDP media description with a given codec set, public IP address and listening port.
+// OfferMediaWith creates a new SDP media description with a given codec set, public IP address
+// and listening port, with fresh local SRTP keys.
 func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
+	return OfferMediaWithOpts(s, rtpListenerPort, encrypted, nil)
+}
+
+// OfferMediaWithOpts is OfferMediaWith, taking the local SRTP material from opts.
+func OfferMediaWithOpts(s *media.CodecSet, rtpListenerPort int, encrypted Encryption, opts *srtp.Options) (MediaDesc, *sdp.MediaDescription, error) {
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
 
@@ -152,7 +158,7 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 	var cryptoProfiles []srtp.Profile
 	if encrypted != EncryptionNone {
 		var err error
-		cryptoProfiles, err = srtp.DefaultProfiles()
+		cryptoProfiles, err = opts.LocalProfiles()
 		if err != nil {
 			return MediaDesc{}, nil, err
 		}
@@ -245,11 +251,18 @@ type Offer Description
 
 type Answer Description
 
-// NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening port.
+// NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening
+// port, with fresh local SRTP keys.
 func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
+	return NewOfferWithOpts(s, publicIp, rtpListenerPort, encrypted, nil)
+}
+
+// NewOfferWithOpts is NewOfferWith, taking the local SRTP material from opts. Passing the profiles
+// used for an earlier offer keeps our master keys stable, so a re-offer does not re-key the peer.
+func NewOfferWithOpts(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts *srtp.Options) (*Offer, error) {
 	sessId := rand.Uint64() // TODO: do we need to track these?
 
-	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted)
+	m, mediaDesc, err := OfferMediaWithOpts(s, rtpListenerPort, encrypted, opts)
 	if err != nil {
 		return nil, err
 	}
