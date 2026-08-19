@@ -117,14 +117,13 @@ func appendCryptoProfiles(attrs []sdp.Attribute, profiles []srtp.Profile) []sdp.
 	return attrs
 }
 
-// OfferMediaWith creates a new SDP media description with a given codec set, public IP address
-// and listening port, with fresh local SRTP keys.
-func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
-	return OfferMediaWithOpts(s, rtpListenerPort, encrypted, nil)
-}
+// OfferMediaWith creates a new SDP media description with a given codec set, public IP address and listening port.
+func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (MediaDesc, *sdp.MediaDescription, error) {
+	opt := &Options{}
+	for _, o := range opts {
+		o(opt)
+	}
 
-// OfferMediaWithOpts is OfferMediaWith, taking the local SRTP material from opts.
-func OfferMediaWithOpts(s *media.CodecSet, rtpListenerPort int, encrypted Encryption, opts *srtp.Options) (MediaDesc, *sdp.MediaDescription, error) {
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
 
@@ -158,7 +157,7 @@ func OfferMediaWithOpts(s *media.CodecSet, rtpListenerPort int, encrypted Encryp
 	var cryptoProfiles []srtp.Profile
 	if encrypted != EncryptionNone {
 		var err error
-		cryptoProfiles, err = opts.LocalProfiles()
+		cryptoProfiles, err = opt.Srtp.LocalProfiles()
 		if err != nil {
 			return MediaDesc{}, nil, err
 		}
@@ -193,8 +192,8 @@ func OfferMediaWithOpts(s *media.CodecSet, rtpListenerPort int, encrypted Encryp
 // OfferMedia creates a new SDP media description.
 //
 // Deprecated: use OfferMediaWith
-func OfferMedia(rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
-	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted)
+func OfferMedia(rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (MediaDesc, *sdp.MediaDescription, error) {
+	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted, opts...)
 }
 
 // AnswerMedia creates a new SDP media description for an answer.
@@ -251,18 +250,25 @@ type Offer Description
 
 type Answer Description
 
-// NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening
-// port, with fresh local SRTP keys.
-func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
-	return NewOfferWithOpts(s, publicIp, rtpListenerPort, encrypted, nil)
+type Options struct {
+	Srtp srtp.Options
 }
 
-// NewOfferWithOpts is NewOfferWith, taking the local SRTP material from opts. Passing the profiles
-// used for an earlier offer keeps our master keys stable, so a re-offer does not re-key the peer.
-func NewOfferWithOpts(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts *srtp.Options) (*Offer, error) {
+type NegotiationOption func(*Options)
+
+func WithLocalProfiles(profiles []srtp.Profile) NegotiationOption {
+	return func(o *Options) {
+		if len(profiles) != 0 {
+			o.Srtp.Profiles = profiles
+		}
+	}
+}
+
+// NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening port.
+func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (*Offer, error) {
 	sessId := rand.Uint64() // TODO: do we need to track these?
 
-	m, mediaDesc, err := OfferMediaWithOpts(s, rtpListenerPort, encrypted, opts)
+	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -302,19 +308,16 @@ func NewOfferWithOpts(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort in
 // NewOffer creates a new SDP offer.
 //
 // Deprecated: use NewOfferWith
-func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
-	return NewOfferWith(media.GlobalCodecs(), publicIp, rtpListenerPort, encrypted)
+func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (*Offer, error) {
+	return NewOfferWith(media.GlobalCodecs(), publicIp, rtpListenerPort, encrypted, opts...)
 }
 
-// Answer generates an SDP answer for an offer, with fresh local SRTP keys.
-func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption) (*Answer, *MediaConfig, error) {
-	return d.AnswerWith(publicIp, rtpListenerPort, enc, nil)
-}
-
-// AnswerWith generates an SDP answer for an offer, taking the local SRTP material from opts.
-// Passing the profiles used for an earlier answer keeps our master keys stable, so answering
-// an unchanged re-offer yields an unchanged answer instead of re-keying the peer.
-func (d *Offer) AnswerWith(publicIp netip.Addr, rtpListenerPort int, enc Encryption, opts *srtp.Options) (*Answer, *MediaConfig, error) {
+// Answer generates an SDP answer for an offer.
+func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption, opts ...NegotiationOption) (*Answer, *MediaConfig, error) {
+	opt := &Options{}
+	for _, o := range opts {
+		o(opt)
+	}
 	audio, err := SelectAudio(d.MediaDesc, false)
 	if err != nil {
 		return nil, nil, err
@@ -325,7 +328,7 @@ func (d *Offer) AnswerWith(publicIp netip.Addr, rtpListenerPort int, enc Encrypt
 		sprof *srtp.Profile
 	)
 	if len(d.CryptoProfiles) != 0 && enc != EncryptionNone {
-		answer, err := opts.LocalProfiles()
+		answer, err := opt.Srtp.LocalProfiles()
 		if err != nil {
 			return nil, nil, err
 		}

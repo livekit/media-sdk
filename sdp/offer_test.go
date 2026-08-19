@@ -1084,20 +1084,19 @@ func TestAnswerWithLocalProfiles(t *testing.T) {
 	local, err := srtp.DefaultProfiles()
 	require.NoError(t, err)
 
-	answer := func(offerData []byte, opts *srtp.Options) (sdp.SessionDescription, *MediaConfig) {
+	answer := func(offerData []byte, opts []srtp.Profile) (sdp.SessionDescription, *MediaConfig) {
 		t.Helper()
 		// Re-parse the offer each time: a re-INVITE arrives on the wire, not as the same object.
 		off, err := ParseOfferWith(g, offerData)
 		require.NoError(t, err)
-		answer, mc, err := off.AnswerWith(ip, 5001, EncryptionRequire, opts)
+		answer, mc, err := off.Answer(ip, 5001, EncryptionRequire, WithLocalProfiles(opts))
 		require.NoError(t, err)
 		require.NotNil(t, mc.Crypto)
 		return answer.SDP, mc
 	}
 
-	opts := &srtp.Options{Profiles: local}
-	answer1, mc1 := answer(offerData, opts)
-	answer2, mc2 := answer(offerData, opts)
+	answer1, mc1 := answer(offerData, local)
+	answer2, mc2 := answer(offerData, local)
 	answer3, mc3 := answer(offerData, nil)
 
 	require.Equal(t, answer1, answer2, "reusing the same profile must re-derive the same answer")
@@ -1144,15 +1143,14 @@ func TestNewOfferWithLocalProfiles(t *testing.T) {
 	local, err := srtp.DefaultProfiles()
 	require.NoError(t, err)
 
-	offer := func(opts *srtp.Options) *Offer {
+	offer := func(profiles []srtp.Profile) *Offer {
 		t.Helper()
-		o, err := NewOfferWithOpts(g, ip, 5000, EncryptionRequire, opts)
+		o, err := NewOfferWith(g, ip, 5000, EncryptionRequire, WithLocalProfiles(profiles))
 		require.NoError(t, err)
 		return o
 	}
 
-	opts := &srtp.Options{Profiles: local}
-	offer1, offer2, offer3 := offer(opts), offer(opts), offer(nil)
+	offer1, offer2, offer3 := offer(local), offer(local), offer(nil)
 
 	require.Equal(t, local, offer1.CryptoProfiles)
 	require.Equal(t, cryptoAttrs(t, &offer1.SDP), cryptoAttrs(t, &offer2.SDP), "reusing the same profiles must offer the same keys")
