@@ -15,6 +15,7 @@
 package sdp_test
 
 import (
+	"encoding/base64"
 	"net"
 	"net/netip"
 	"slices"
@@ -1067,4 +1068,55 @@ a=inactive
 			require.Equal(t, test.want, d.Direction)
 		})
 	}
+}
+
+// AnswerWith must advertise exactly the local key material it configures, and must
+// keep both stable when the same profiles are passed for a re-offer.
+func TestAnswerWithLocalProfiles(t *testing.T) {
+	g := codecSet()
+	ip := netip.MustParseAddr("127.0.0.1")
+
+	offer, err := NewOfferWith(g, netip.MustParseAddr("1.1.1.1"), 5000, EncryptionRequire)
+	require.NoError(t, err)
+	offerData, err := offer.SDP.Marshal()
+	require.NoError(t, err)
+
+	local, err := srtp.DefaultProfiles()
+	require.NoError(t, err)
+
+	answer := func(offerData []byte, opts *srtp.Options) (sdp.SessionDescription, *MediaConfig) {
+		t.Helper()
+		// Re-parse the offer each time: a re-INVITE arrives on the wire, not as the same object.
+		off, err := ParseOfferWith(g, offerData)
+		require.NoError(t, err)
+		answer, mc, err := off.AnswerWith(ip, 5001, EncryptionRequire, opts)
+		require.NoError(t, err)
+		require.NotNil(t, mc.Crypto)
+		return answer.SDP, mc
+	}
+
+	opts := &srtp.Options{Profiles: local}
+	answer1, mc1 := answer(offerData, opts)
+	answer2, mc2 := answer(offerData, opts)
+	answer3, mc3 := answer(offerData, nil)
+
+	require.Equal(t, answer1, answer2, "reusing the same profile must re-derive the same answer")
+	require.NotEqual(t, answer1, answer3, "using different profiles must result in different answers")
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterKey, mc2.Crypto.Keys.RemoteMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterSalt, mc2.Crypto.Keys.RemoteMasterSalt)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterKey, mc3.Crypto.Keys.RemoteMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterSalt, mc3.Crypto.Keys.RemoteMasterSalt)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterKey, mc2.Crypto.Keys.LocalMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterSalt, mc2.Crypto.Keys.LocalMasterSalt)
+	require.NotEqual(t, mc1.Crypto.Keys.LocalMasterKey, mc3.Crypto.Keys.LocalMasterKey)
+	require.NotEqual(t, mc1.Crypto.Keys.LocalMasterSalt, mc3.Crypto.Keys.LocalMasterSalt)
+
+	// The a=crypto we send must carry the key we configured locally.
+	audio := GetAudio(&answer1)
+	require.NotNil(t, audio)
+	i := slices.IndexFunc(audio.Attributes, func(a sdp.Attribute) bool { return a.Key == "crypto" })
+	require.True(t, i >= 0, "no crypto attribute in answer")
+	inline, err := base64.StdEncoding.DecodeString(strings.TrimSpace(getInline(audio.Attributes[i].Value)))
+	require.NoError(t, err)
+	require.Equal(t, append(slices.Clone(mc1.Crypto.Keys.LocalMasterKey), mc1.Crypto.Keys.LocalMasterSalt...), inline)
 }

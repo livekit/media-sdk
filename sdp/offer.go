@@ -293,8 +293,15 @@ func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*
 	return NewOfferWith(media.GlobalCodecs(), publicIp, rtpListenerPort, encrypted)
 }
 
-// Answer generates an SDP answer for an offer.
+// Answer generates an SDP answer for an offer, with fresh local SRTP keys.
 func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption) (*Answer, *MediaConfig, error) {
+	return d.AnswerWith(publicIp, rtpListenerPort, enc, nil)
+}
+
+// AnswerWith generates an SDP answer for an offer, taking the local SRTP material from opts.
+// Passing the profiles used for an earlier answer keeps our master keys stable, so answering
+// an unchanged re-offer yields an unchanged answer instead of re-keying the peer.
+func (d *Offer) AnswerWith(publicIp netip.Addr, rtpListenerPort int, enc Encryption, opts *srtp.Options) (*Answer, *MediaConfig, error) {
 	audio, err := SelectAudio(d.MediaDesc, false)
 	if err != nil {
 		return nil, nil, err
@@ -305,7 +312,7 @@ func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption)
 		sprof *srtp.Profile
 	)
 	if len(d.CryptoProfiles) != 0 && enc != EncryptionNone {
-		answer, err := srtp.DefaultProfiles()
+		answer, err := opts.LocalProfiles()
 		if err != nil {
 			return nil, nil, err
 		}
