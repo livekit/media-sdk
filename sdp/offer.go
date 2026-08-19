@@ -118,7 +118,12 @@ func appendCryptoProfiles(attrs []sdp.Attribute, profiles []srtp.Profile) []sdp.
 }
 
 // OfferMediaWith creates a new SDP media description with a given codec set, public IP address and listening port.
-func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
+func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (MediaDesc, *sdp.MediaDescription, error) {
+	opt := &Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+
 	// Static compiler check for frame duration hardcoded below.
 	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
 
@@ -152,7 +157,7 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 	var cryptoProfiles []srtp.Profile
 	if encrypted != EncryptionNone {
 		var err error
-		cryptoProfiles, err = srtp.DefaultProfiles()
+		cryptoProfiles, err = opt.Srtp.LocalProfiles()
 		if err != nil {
 			return MediaDesc{}, nil, err
 		}
@@ -187,8 +192,8 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 // OfferMedia creates a new SDP media description.
 //
 // Deprecated: use OfferMediaWith
-func OfferMedia(rtpListenerPort int, encrypted Encryption) (MediaDesc, *sdp.MediaDescription, error) {
-	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted)
+func OfferMedia(rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (MediaDesc, *sdp.MediaDescription, error) {
+	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted, opts...)
 }
 
 // AnswerMedia creates a new SDP media description for an answer.
@@ -245,11 +250,25 @@ type Offer Description
 
 type Answer Description
 
+type Options struct {
+	Srtp srtp.Options
+}
+
+type NegotiationOption func(*Options)
+
+func WithLocalProfiles(profiles []srtp.Profile) NegotiationOption {
+	return func(o *Options) {
+		if len(profiles) != 0 {
+			o.Srtp.Profiles = profiles
+		}
+	}
+}
+
 // NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening port.
-func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
+func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (*Offer, error) {
 	sessId := rand.Uint64() // TODO: do we need to track these?
 
-	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted)
+	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -289,12 +308,16 @@ func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, e
 // NewOffer creates a new SDP offer.
 //
 // Deprecated: use NewOfferWith
-func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption) (*Offer, error) {
-	return NewOfferWith(media.GlobalCodecs(), publicIp, rtpListenerPort, encrypted)
+func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (*Offer, error) {
+	return NewOfferWith(media.GlobalCodecs(), publicIp, rtpListenerPort, encrypted, opts...)
 }
 
 // Answer generates an SDP answer for an offer.
-func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption) (*Answer, *MediaConfig, error) {
+func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption, opts ...NegotiationOption) (*Answer, *MediaConfig, error) {
+	opt := &Options{}
+	for _, o := range opts {
+		o(opt)
+	}
 	audio, err := SelectAudio(d.MediaDesc, false)
 	if err != nil {
 		return nil, nil, err
@@ -305,7 +328,7 @@ func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption)
 		sprof *srtp.Profile
 	)
 	if len(d.CryptoProfiles) != 0 && enc != EncryptionNone {
-		answer, err := srtp.DefaultProfiles()
+		answer, err := opt.Srtp.LocalProfiles()
 		if err != nil {
 			return nil, nil, err
 		}

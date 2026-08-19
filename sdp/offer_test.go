@@ -15,6 +15,7 @@
 package sdp_test
 
 import (
+	"encoding/base64"
 	"net"
 	"net/netip"
 	"slices"
@@ -1067,4 +1068,116 @@ a=inactive
 			require.Equal(t, test.want, d.Direction)
 		})
 	}
+}
+
+// AnswerWith must advertise exactly the local key material it configures, and must
+// keep both stable when the same profiles are passed for a re-offer.
+func TestAnswerWithLocalProfiles(t *testing.T) {
+	g := codecSet()
+	ip := netip.MustParseAddr("127.0.0.1")
+
+	offer, err := NewOfferWith(g, netip.MustParseAddr("1.1.1.1"), 5000, EncryptionRequire)
+	require.NoError(t, err)
+	offerData, err := offer.SDP.Marshal()
+	require.NoError(t, err)
+
+	local, err := srtp.DefaultProfiles()
+	require.NoError(t, err)
+
+	answer := func(offerData []byte, opts []srtp.Profile) (sdp.SessionDescription, *MediaConfig) {
+		t.Helper()
+		// Re-parse the offer each time: a re-INVITE arrives on the wire, not as the same object.
+		off, err := ParseOfferWith(g, offerData)
+		require.NoError(t, err)
+		answer, mc, err := off.Answer(ip, 5001, EncryptionRequire, WithLocalProfiles(opts))
+		require.NoError(t, err)
+		require.NotNil(t, mc.Crypto)
+		return answer.SDP, mc
+	}
+
+	answer1, mc1 := answer(offerData, local)
+	answer2, mc2 := answer(offerData, local)
+	answer3, mc3 := answer(offerData, nil)
+
+	require.Equal(t, answer1, answer2, "reusing the same profile must re-derive the same answer")
+	require.NotEqual(t, answer1, answer3, "using different profiles must result in different answers")
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterKey, mc2.Crypto.Keys.RemoteMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterSalt, mc2.Crypto.Keys.RemoteMasterSalt)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterKey, mc3.Crypto.Keys.RemoteMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterSalt, mc3.Crypto.Keys.RemoteMasterSalt)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterKey, mc2.Crypto.Keys.LocalMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterSalt, mc2.Crypto.Keys.LocalMasterSalt)
+	require.NotEqual(t, mc1.Crypto.Keys.LocalMasterKey, mc3.Crypto.Keys.LocalMasterKey)
+	require.NotEqual(t, mc1.Crypto.Keys.LocalMasterSalt, mc3.Crypto.Keys.LocalMasterSalt)
+
+	// The a=crypto we send must carry the key we configured locally.
+	audio := GetAudio(&answer1)
+	require.NotNil(t, audio)
+	i := slices.IndexFunc(audio.Attributes, func(a sdp.Attribute) bool { return a.Key == "crypto" })
+	require.True(t, i >= 0, "no crypto attribute in answer")
+	inline, err := base64.StdEncoding.DecodeString(strings.TrimSpace(getInline(audio.Attributes[i].Value)))
+	require.NoError(t, err)
+	require.Equal(t, append(slices.Clone(mc1.Crypto.Keys.LocalMasterKey), mc1.Crypto.Keys.LocalMasterSalt...), inline)
+}
+
+func cryptoAttrs(t testing.TB, s *sdp.SessionDescription) []string {
+	t.Helper()
+	audio := GetAudio(s)
+	require.NotNil(t, audio)
+	var out []string
+	for _, a := range audio.Attributes {
+		if a.Key == "crypto" {
+			out = append(out, a.Value)
+		}
+	}
+	require.NotEmpty(t, out)
+	return out
+}
+
+// NewOfferWithOpts must advertise exactly the local key material it was given, so that a
+// re-offer keeps the keys of a running session instead of re-keying the peer.
+func TestNewOfferWithLocalProfiles(t *testing.T) {
+	g := codecSet()
+	ip := netip.MustParseAddr("1.1.1.1")
+
+	local, err := srtp.DefaultProfiles()
+	require.NoError(t, err)
+
+	offer := func(profiles []srtp.Profile) *Offer {
+		t.Helper()
+		o, err := NewOfferWith(g, ip, 5000, EncryptionRequire, WithLocalProfiles(profiles))
+		require.NoError(t, err)
+		return o
+	}
+
+	offer1, offer2, offer3 := offer(local), offer(local), offer(nil)
+
+	require.Equal(t, local, offer1.CryptoProfiles)
+	require.Equal(t, cryptoAttrs(t, &offer1.SDP), cryptoAttrs(t, &offer2.SDP), "reusing the same profiles must offer the same keys")
+	require.NotEqual(t, cryptoAttrs(t, &offer1.SDP), cryptoAttrs(t, &offer3.SDP), "without options each offer re-keys")
+
+	// Full round trip: the offerer's negotiated local key must survive a re-offer, even
+	// though the answerer picks new keys of its own each time.
+	negotiate := func(o *Offer) *MediaConfig {
+		t.Helper()
+		offerData, err := o.SDP.Marshal()
+		require.NoError(t, err)
+		parsed, err := ParseOfferWith(g, offerData)
+		require.NoError(t, err)
+		answer, _, err := parsed.Answer(netip.MustParseAddr("2.2.2.2"), 5001, EncryptionRequire)
+		require.NoError(t, err)
+		answerData, err := answer.SDP.Marshal()
+		require.NoError(t, err)
+		parsedAnswer, err := ParseAnswerWith(g, answerData)
+		require.NoError(t, err)
+		mc, err := parsedAnswer.Apply(o, EncryptionRequire)
+		require.NoError(t, err)
+		require.NotNil(t, mc.Crypto)
+		return mc
+	}
+
+	mc1, mc2 := negotiate(offer1), negotiate(offer2)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterKey, mc2.Crypto.Keys.LocalMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterSalt, mc2.Crypto.Keys.LocalMasterSalt)
+	require.NotEqual(t, mc1.Crypto.Keys.RemoteMasterKey, mc2.Crypto.Keys.RemoteMasterKey)
 }

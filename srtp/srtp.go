@@ -68,8 +68,19 @@ func DefaultProfiles() ([]Profile, error) {
 	return out, nil
 }
 
+// Options carries the local SRTP material to use for an offer or an answer.
 type Options struct {
+	// Profiles to advertise as our own. Generated with DefaultProfiles if empty.
+	// Passing the same set again keeps our master keys stable across re-offers.
 	Profiles []Profile
+}
+
+// LocalProfiles returns the profiles from o, generating a fresh set if o is nil or empty.
+func (o *Options) LocalProfiles() ([]Profile, error) {
+	if o != nil && len(o.Profiles) != 0 {
+		return o.Profiles, nil
+	}
+	return DefaultProfiles()
 }
 
 type ProtectionProfile string
