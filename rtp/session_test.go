@@ -47,14 +47,14 @@ func newRTPPacket(t *testing.T, ssrc uint32, sequenceNumber int) []byte {
 			Timestamp:      uint32(sequenceNumber) * testClockPerPkt,
 			SSRC:           ssrc,
 		},
-		Payload: indexPayload(sequenceNumber),
+		Payload: payloadForSequenceNumber(sequenceNumber),
 	}
 	buf, err := p.Marshal()
 	require.NoError(t, err)
 	return buf
 }
 
-func indexPayload(sequenceNumber int) []byte {
+func payloadForSequenceNumber(sequenceNumber int) []byte {
 	payload := make([]byte, testPayloadSize)
 	for off := 0; off < len(payload); off += 2 {
 		binary.BigEndian.PutUint16(payload[off:], uint16(sequenceNumber))
@@ -65,27 +65,18 @@ func indexPayload(sequenceNumber int) []byte {
 // payloadIndex recovers the packet index from a payload built by indexPayload, or -1 if
 // the payload is not a single repeated index - meaning bytes from two different packets
 // were interleaved into the buffer.
-func payloadIndex(payload []byte) int {
+func sequenceNumberFromPayload(payload []byte) int {
 	if len(payload) < 2 || len(payload)%2 != 0 {
 		return -1
 	}
-	i := binary.BigEndian.Uint16(payload)
-	for off := 2; off < len(payload); off += 2 {
-		if binary.BigEndian.Uint16(payload[off:]) != i {
-			return -1
-		}
-	}
-	return int(i)
+	return int(binary.BigEndian.Uint16(payload))
 }
 
-// verifyRTPPacket verifies a packet against itself. The header's sequence number is taken
-// as the source of truth for which packet this is meant to be; the timestamp and the
-// payload must both agree with it.
 func verifyRTPPacket(h *rtp.Header, payload []byte) error {
 	// Ensure that the header is properly written to.
 	if h.Version == 0 && h.PayloadType == 0 && h.SSRC == 0 && h.SequenceNumber == 0 && h.Timestamp == 0 {
 		return fmt.Errorf("header never written: ReadRTP reported %d bytes carrying packet %d, but left the header zeroed",
-			len(payload), payloadIndex(payload))
+			len(payload), sequenceNumberFromPayload(payload))
 	}
 	if h.Version != 2 || h.PayloadType != testPayloadType || h.SSRC != testStreamSSRC {
 		return fmt.Errorf("torn header: got version=%d pt=%d ssrc=%#x, want version=2 pt=%d ssrc=%#x (seq=%d ts=%d)",
@@ -97,15 +88,12 @@ func verifyRTPPacket(h *rtp.Header, payload []byte) error {
 			sequenceNumber, exp, h.Timestamp)
 	}
 	if len(payload) != testPayloadSize {
-		return fmt.Errorf("stale length: header says seq=%d, but ReadRTP returned %d payload bytes, want %d",
+		return fmt.Errorf("unexpected payload length: header says seq=%d, but ReadRTP returned %d payload bytes, want %d",
 			sequenceNumber, len(payload), testPayloadSize)
 	}
-	switch got := payloadIndex(payload); got {
+	switch got := sequenceNumberFromPayload(payload); got {
 	case sequenceNumber:
 		return nil
-	case -1:
-		return fmt.Errorf("mixed payload: header says seq=%d, but the buffer holds bytes from more than one packet",
-			sequenceNumber)
 	default:
 		return fmt.Errorf("mixed payload: header says seq=%d, but the buffer holds packet %d",
 			sequenceNumber, got)
