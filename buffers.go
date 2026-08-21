@@ -11,19 +11,32 @@ type sample interface {
 	byte | int8 | int16 | int32 | int64 | float32 | float64
 }
 
+type FullFramesOption[T ~[]S, S sample] func(*fullFrameBuffer[T, S])
+
+func DropTailOnClose[T ~[]S, S sample]() FullFramesOption[T, S] {
+	return func(b *fullFrameBuffer[T, S]) {
+		b.dropTail = true
+	}
+}
+
 // FullFrames creates a writer that only writes full frames of a given size to the underlying writer (except the last one).
-func FullFrames[T ~[]S, S sample](w WriteCloser[T], frameSize int) WriteCloser[T] {
+func FullFrames[T ~[]S, S sample](w WriteCloser[T], frameSize int, opts ...FullFramesOption[T, S]) WriteCloser[T] {
 	if frameSize <= 0 {
 		panic("invalid frame size")
 	}
-	return &fullFrameBuffer[T, S]{
+	b := &fullFrameBuffer[T, S]{
 		w:         w,
 		frameSize: frameSize,
 		buf:       make([]S, 0, frameSize),
 	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 type fullFrameBuffer[T ~[]S, S sample] struct {
+	dropTail  bool // Avoid flushing partial frames on Close()
 	frameSize int
 	mu        sync.Mutex
 	w         WriteCloser[T]
@@ -72,7 +85,7 @@ func (b *fullFrameBuffer[T, S]) flush(force bool) error {
 func (b *fullFrameBuffer[T, S]) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	err := b.flush(true)
+	err := b.flush(!b.dropTail)
 	err2 := b.w.Close()
 	return errors.Join(err, err2)
 }
