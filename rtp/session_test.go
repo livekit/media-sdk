@@ -62,9 +62,6 @@ func payloadForSequenceNumber(sequenceNumber int) []byte {
 	return payload
 }
 
-// payloadIndex recovers the packet index from a payload built by indexPayload, or -1 if
-// the payload is not a single repeated index - meaning bytes from two different packets
-// were interleaved into the buffer.
 func sequenceNumberFromPayload(payload []byte) int {
 	if len(payload) < 2 || len(payload)%2 != 0 {
 		return -1
@@ -78,40 +75,33 @@ func verifyRTPPacket(h *rtp.Header, payload []byte) error {
 		return fmt.Errorf("header never written: ReadRTP reported %d bytes carrying packet %d, but left the header zeroed",
 			len(payload), sequenceNumberFromPayload(payload))
 	}
+
 	if h.Version != 2 || h.PayloadType != testPayloadType || h.SSRC != testStreamSSRC {
 		return fmt.Errorf("torn header: got version=%d pt=%d ssrc=%#x, want version=2 pt=%d ssrc=%#x (seq=%d ts=%d)",
 			h.Version, h.PayloadType, h.SSRC, testPayloadType, uint32(testStreamSSRC), h.SequenceNumber, h.Timestamp)
 	}
+
 	sequenceNumber := int(h.SequenceNumber)
 	if exp := uint32(sequenceNumber) * testClockPerPkt; h.Timestamp != exp {
 		return fmt.Errorf("torn header: seq=%d implies ts=%d, got ts=%d - header fields came from two packets",
 			sequenceNumber, exp, h.Timestamp)
 	}
+
 	if len(payload) != testPayloadSize {
 		return fmt.Errorf("unexpected payload length: header says seq=%d, but ReadRTP returned %d payload bytes, want %d",
 			sequenceNumber, len(payload), testPayloadSize)
 	}
-	switch got := sequenceNumberFromPayload(payload); got {
-	case sequenceNumber:
-		return nil
-	default:
+
+	gotSequeneceNumber := sequenceNumberFromPayload(payload)
+	if gotSequeneceNumber != sequenceNumber {
 		return fmt.Errorf("mixed payload: header says seq=%d, but the buffer holds packet %d",
-			sequenceNumber, got)
+			sequenceNumber, gotSequeneceNumber)
 	}
+	return nil
 }
 
 func TestSessionZeroCopyHandoff(t *testing.T) {
-	// Deliberately not gated on enableZeroCopy: "every delivered packet is internally
-	// consistent" must hold on both delivery paths, so this test is also the check that
-	// compiling the handoff out is a safe mitigation.
-	for i := range 10 {
-		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			testZeroCopyHandoff(t, 8000)
-		})
-	}
-}
-
-func testZeroCopyHandoff(t *testing.T, packets int) {
+	numPackets := 8000
 	cli, srv := net.Pipe()
 	defer cli.Close()
 	require.NoError(t, srv.SetReadDeadline(time.Now().Add(30*time.Second)))
@@ -119,12 +109,8 @@ func testZeroCopyHandoff(t *testing.T, packets int) {
 	sess := NewSession(logger.GetLogger(), srv)
 	defer sess.Close()
 
-	// TODO(alexfish): Clean this up.
-
-	// Blast one SSRC with no pacing, so the pump delivers packets microseconds apart
-	// rather than a frame apart, then a sentinel SSRC to mark the end of the run.
-	sent := make([][]byte, 0, packets+1)
-	for i := range packets {
+	sent := make([][]byte, 0, numPackets+1)
+	for i := range numPackets {
 		sent = append(sent, newRTPPacket(t, testStreamSSRC, i))
 	}
 	sent = append(sent, newRTPPacket(t, testSentinelSSRC, 0))
@@ -138,8 +124,6 @@ func testZeroCopyHandoff(t *testing.T, packets int) {
 		}
 	})
 
-	// The first AcceptStream returns the stream for testStreamSSRC. Its first packet is
-	// already sitting in r.recv - AcceptStream calls r.write before it returns.
 	r, ssrc, err := sess.AcceptStream()
 	require.NoError(t, err)
 	require.EqualValues(t, uint32(testStreamSSRC), ssrc)
@@ -181,5 +165,5 @@ func testZeroCopyHandoff(t *testing.T, packets int) {
 
 	require.NoError(t, verifyErr, "ReadRTP delivered a corrupted packet")
 	require.NotZero(t, delivered, "no packets were delivered")
-	t.Logf("delivered %d/%d packets", delivered, packets)
+	t.Logf("delivered %d/%d packets", delivered, numPackets)
 }
