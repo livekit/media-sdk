@@ -28,8 +28,7 @@ import (
 )
 
 const (
-	enableZeroCopy = true
-	MTUSize        = 1500
+	MTUSize = 1500
 )
 
 type Session interface {
@@ -168,40 +167,51 @@ type readStream struct {
 }
 
 func (r *readStream) write(p *rtp.Packet) {
-	if enableZeroCopy {
-		r.mu.Lock()
-		h, payload := r.hdr, r.payload
+	r.mu.Lock()
+
+	if r.hdr != nil {
+		// zero copy
+		*r.hdr = p.Header
+		n := copy(r.payload, p.Payload)
 		r.hdr, r.payload = nil, nil
 		r.mu.Unlock()
-		if h != nil {
-			// zero copy
-			*h = p.Header
-			n := copy(payload, p.Payload)
-			select {
-			case <-r.closed:
-			case r.copied <- n:
-			}
-			return
+
+		select {
+		case <-r.closed:
+		case r.copied <- n:
 		}
+		return
 	}
 	p.Payload = slices.Clone(p.Payload)
 	select {
 	case r.recv <- p:
 	default:
 	}
+	r.mu.Unlock()
 }
 
 func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 	direct := false
-	if enableZeroCopy {
-		r.mu.Lock()
-		if r.hdr == nil {
-			r.hdr = h
-			r.payload = payload
-			direct = true
-		}
+	r.mu.Lock()
+
+	// Check the queue before offering our buffer.
+	select {
+	case p := <-r.recv:
 		r.mu.Unlock()
+		*h = p.Header
+		n := copy(payload, p.Payload)
+		return n, nil
+	default:
 	}
+
+	if r.hdr == nil {
+		r.hdr = h
+		r.payload = payload
+		direct = true
+	}
+	r.mu.Unlock()
+
+	// If we didn't successfully make an offer, read from the queue.
 	if !direct {
 		select {
 		case p := <-r.recv:
@@ -212,6 +222,7 @@ func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 		}
 		return 0, io.EOF
 	}
+
 	defer func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -219,12 +230,10 @@ func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 			r.hdr, r.payload = nil, nil
 		}
 	}()
+
+	// If we were able to offer our buffer, wait for the copy signal.
 	select {
 	case n := <-r.copied:
-		return n, nil
-	case p := <-r.recv:
-		*h = p.Header
-		n := copy(payload, p.Payload)
 		return n, nil
 	case <-r.closed:
 	}
