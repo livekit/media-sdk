@@ -195,8 +195,8 @@ func memstats(pid int) int64 {
 }
 
 func TestResampleLeak(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("windows is not supported for this test")
+	if runtime.GOOS != "linux" {
+		t.Skip("only linux supported for this test")
 	}
 	pid := os.Getpid()
 
