@@ -17,6 +17,7 @@ package dtmf
 import (
 	"context"
 	"encoding/hex"
+	"strconv"
 	"testing"
 	"time"
 
@@ -132,83 +133,87 @@ func TestDecodeRTPWithEnd(t *testing.T) {
 func TestDTMFDelay(t *testing.T) {
 	const startTime = 1242
 
-	var buf rtp.Buffer
-	w := rtp.NewSeqWriter(&buf).NewStream(101, SampleRate)
-	err := Write(context.Background(), nil, w, startTime, "1w23")
-	require.NoError(t, err)
+	for _, eventsRate := range []int{
+		8000, 16000,
+	} {
+		t.Run(strconv.Itoa(eventsRate), func(t *testing.T) {
+			var buf rtp.Buffer
+			w := rtp.NewSeqWriter(&buf).NewStream(101, eventsRate)
+			err := Write(context.Background(), nil, w, eventsRate, startTime, "1w23")
+			require.NoError(t, err)
 
-	type packet struct {
-		SequenceNumber uint16
-		Timestamp      uint32
-		Marker         bool
-		Event
-	}
-	var (
-		exp []packet
-		seq uint16
-		ts  uint32
-	)
-	const (
-		packetDur = uint32(SampleRate / int(time.Second/rtp.DefFrameDur))
-	)
+			type packet struct {
+				SequenceNumber uint16
+				Timestamp      uint32
+				Marker         bool
+				Event
+			}
+			var (
+				exp []packet
+				seq uint16
+				ts  uint32
+			)
+			packetDur := uint32(eventsRate / int(time.Second/rtp.DefFrameDur))
 
-	ts = startTime
+			ts = startTime
 
-	expectDigit := func(code byte, digit byte) {
-		start := ts
-		const n = 13
-		for i := 0; i < n-1; i++ {
-			exp = append(exp, packet{
-				SequenceNumber: seq,
-				Timestamp:      start, // should be the same for all events
-				Marker:         i == 0,
-				Event: Event{
-					Code:   code,
-					Digit:  digit,
-					Volume: eventVolume,
-					Dur:    uint16(i+1) * uint16(packetDur),
-					End:    false,
-				},
-			})
-			ts += packetDur
-			seq++
-		}
-		// end event must be sent 3 times with the same duration
-		for i := 0; i < 3; i++ {
-			exp = append(exp, packet{
-				SequenceNumber: seq,
-				Timestamp:      start, // should be the same for all events
-				Marker:         false,
-				Event: Event{
-					Code:   code,
-					Digit:  digit,
-					Volume: eventVolume,
-					Dur:    uint16(n) * uint16(packetDur),
-					End:    true,
-				},
-			})
-			seq++
-		}
-		ts += packetDur
-		// delay between digits
-		ts += uint32(eventDur / (time.Second / SampleRate))
-		// rounding error (12.5 events in a sec)
-		ts -= packetDur / 2
-	}
-	expectDigit(1, '1')
-	ts += SampleRate / 2 // 500ms delay
-	expectDigit(2, '2')
-	expectDigit(3, '3')
-	var got []packet
-	for _, p := range buf {
-		e, err := Decode(p.Payload)
-		require.NoError(t, err)
-		got = append(got, packet{
-			SequenceNumber: p.SequenceNumber,
-			Timestamp:      p.Timestamp,
-			Marker:         p.Marker,
-			Event:          e,
+			expectDigit := func(code byte, digit byte) {
+				start := ts
+				const n = 13
+				for i := 0; i < n-1; i++ {
+					exp = append(exp, packet{
+						SequenceNumber: seq,
+						Timestamp:      start, // should be the same for all events
+						Marker:         i == 0,
+						Event: Event{
+							Code:   code,
+							Digit:  digit,
+							Volume: eventVolume,
+							Dur:    uint16(i+1) * uint16(packetDur),
+							End:    false,
+						},
+					})
+					ts += packetDur
+					seq++
+				}
+				// end event must be sent 3 times with the same duration
+				for i := 0; i < 3; i++ {
+					exp = append(exp, packet{
+						SequenceNumber: seq,
+						Timestamp:      start, // should be the same for all events
+						Marker:         false,
+						Event: Event{
+							Code:   code,
+							Digit:  digit,
+							Volume: eventVolume,
+							Dur:    uint16(n) * uint16(packetDur),
+							End:    true,
+						},
+					})
+					seq++
+				}
+				ts += packetDur
+				// delay between digits
+				ts += uint32(eventDur / (time.Second / time.Duration(eventsRate)))
+				// rounding error (12.5 events in a sec)
+				ts -= packetDur / 2
+			}
+			expectDigit(1, '1')
+			ts += uint32(eventsRate) / 2 // 500ms delay
+			expectDigit(2, '2')
+			expectDigit(3, '3')
+			var got []packet
+			for _, p := range buf {
+				e, err := Decode(p.Payload)
+				require.NoError(t, err)
+				got = append(got, packet{
+					SequenceNumber: p.SequenceNumber,
+					Timestamp:      p.Timestamp,
+					Marker:         p.Marker,
+					Event:          e,
+				})
+			}
+			require.Equal(t, exp, got)
 		})
 	}
-	require.Equal(t, exp, got)
 }

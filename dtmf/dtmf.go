@@ -17,6 +17,7 @@ package dtmf
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"time"
@@ -27,19 +28,20 @@ import (
 )
 
 const (
-	SDPNameOnly    = "telephone-event"
-	SDPNameAndRate = SDPNameOnly + "/8000"
-	SDPName        = SDPNameAndRate // Deprecated: use SDPNameOnly or SDPNameAndRate
+	SDPNameOnly = "telephone-event"
 )
-const SampleRate = 8000
 
 func init() {
-	media.RegisterCodec(media.NewCodec(media.CodecInfo{
-		SDPName:     SDPNameAndRate,
-		SampleRate:  SampleRate,
-		RTPIsStatic: false,
-		Priority:    -100, // let it be last in SDP
-	}))
+	for i, rate := range []int{
+		8000, 16000, 48000,
+	} {
+		media.RegisterCodec(media.NewCodec(media.CodecInfo{
+			SDPName:     fmt.Sprintf("%s/%d", SDPNameOnly, rate),
+			SampleRate:  rate,
+			RTPIsStatic: false,
+			Priority:    -100 - i, // let it be last in SDP
+		}))
+	}
 }
 
 const (
@@ -219,7 +221,7 @@ func Encode(out []byte, ev Event) (int, error) {
 // Write in-band (analog) and off-band (digital) DTMF tones to audio and RTP streams respectively.
 //
 // Digits may contain a special character 'w' which adds a 0.5 sec delay.
-func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *rtp.Stream, startTs uint32, digits string) error {
+func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *rtp.Stream, eventsRate int, startTs uint32, digits string) error {
 	const framesPerSec = int(time.Second / rtp.DefFrameDur)
 	var (
 		buf    [4]byte
@@ -247,7 +249,7 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 		totalDur = dt
 		nextDelay = 0
 		if events != nil {
-			events.Delay(uint32(dt / (time.Second / SampleRate)))
+			events.Delay(uint32(dt / (time.Second / time.Duration(eventsRate))))
 		}
 	}
 
@@ -303,7 +305,7 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 			n, err := Encode(buf[:], Event{
 				Code:   code,
 				Volume: eventVolume,
-				Dur:    uint16(dur / (time.Second / SampleRate)),
+				Dur:    uint16(dur / (time.Second / time.Duration(eventsRate))),
 				End:    end,
 			})
 			if err != nil {
@@ -323,7 +325,7 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 					return err
 				}
 				// advance the timestamp now
-				events.Delay(uint32(totalDur / (time.Second / SampleRate)))
+				events.Delay(uint32(totalDur / (time.Second / time.Duration(eventsRate))))
 			}
 		}
 		remaining -= step
