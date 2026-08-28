@@ -26,13 +26,12 @@ const SDPName = "opus/48000/2"
 
 func init() {
 	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:      SDPName,
-		SampleRate:   48000,
-		RTPClockRate: 48000,
-		RTPIsStatic:  false,
-		Priority:     10,
-		Disabled:     true,
-		FileExt:      "opus",
+		SDPName:     SDPName,
+		SampleRate:  48000,
+		RTPIsStatic: false,
+		Priority:    10,
+		Disabled:    true,
+		FileExt:     "opus",
 	}, func(w media.PCM16Writer) media.WriteCloser[Sample] {
 		dec, err := Decode(w, 1, logger.GetLogger())
 		if err != nil {
