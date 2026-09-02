@@ -143,12 +143,17 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 			dtmfTypes[ci.RTPClockRate] = codec.Type
 		}
 	}
-	var ratesForDTMF []int
+	var (
+		ratesForDTMF []int
+		audioCodecs  []CodecInfo
+	)
 	for _, codec := range codecs {
 		ci := codec.Codec.Info()
 		if strings.HasPrefix(ci.SDPName, dtmf.SDPNameOnly+"/") {
 			continue
 		}
+		audioCodecs = append(audioCodecs, codec)
+
 		dtmfRate := ci.RTPClockRate
 		if _, ok := dtmfTypes[dtmfRate]; ok && !slices.Contains(ratesForDTMF, dtmfRate) {
 			ratesForDTMF = append(ratesForDTMF, dtmfRate)
@@ -203,7 +208,7 @@ func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption
 		proto = "SAVP"
 	}
 	return MediaDesc{
-			Codecs:         codecs,
+			Codecs:         audioCodecs,
 			DTMF:           dtmfList,
 			CryptoProfiles: cryptoProfiles,
 		}, &sdp.MediaDescription{
@@ -244,7 +249,7 @@ func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *
 	if d := audio.DTMF; d != nil {
 		formats = append(formats, strconv.Itoa(int(d.Type)))
 		attrs = append(attrs, []sdp.Attribute{
-			{Key: "rtpmap", Value: fmt.Sprintf("%d %d", d.Type, d.Rate)},
+			{Key: "rtpmap", Value: fmt.Sprintf("%d %s/%d", d.Type, dtmf.SDPNameOnly, d.Rate)},
 			{Key: "fmtp", Value: fmt.Sprintf("%d 0-16", d.Type)},
 		}...)
 	}
@@ -799,6 +804,11 @@ func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, err
 		_ = c // just add
 	}
 	for _, ci := range codecs {
+		if slices.ContainsFunc(out.DTMF, func(d DTMFInfo) bool {
+			return d.Type == byte(ci.Type)
+		}) {
+			continue
+		}
 		var codec media.AudioCodec
 		if ci.Name != "" {
 			codec, _ = CodecByNameWith(s, ci.Name, ci.Params).(media.AudioCodec)
