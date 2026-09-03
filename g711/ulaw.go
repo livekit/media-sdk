@@ -30,14 +30,28 @@ const (
 )
 
 func init() {
-	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:     ULawSDPNameAndRate,
-		SampleRate:  8000,
+	info := media.CodecTypeInfo{
+		Name:        ULawSDPNameOnly,
 		RTPDefType:  prtp.PayloadTypePCMU,
 		RTPIsStatic: true,
 		Priority:    -10,
 		FileExt:     "g711u",
-	}, DecodeULaw, EncodeULaw))
+	}
+	media.RegisterCodec(media.NewCodec(info, nil, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
+		if c.Channels != 0 && c.Channels != 1 {
+			return media.CodecInfo{}, nil, false
+		}
+		if c.SampleRate == 0 {
+			c.SampleRate = 8000
+		}
+		if c.SampleRate != 8000 {
+			return media.CodecInfo{}, nil, false
+		}
+		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
+		info.Params = nil
+		create := media.NewAudioCodecFunc(info, DecodeULaw, EncodeULaw)
+		return info, create, true
+	}))
 }
 
 type ULawSample []byte

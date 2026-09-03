@@ -22,27 +22,49 @@ import (
 	media "github.com/livekit/media-sdk"
 )
 
-const SDPName = "opus/48000/2"
+const (
+	SDPNameOnly = "opus"
+	SDPName     = SDPNameOnly + "/48000/2"
+)
 
 func init() {
-	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:     SDPName,
-		SampleRate:  48000,
+	info := media.CodecTypeInfo{
+		Name:        SDPNameOnly,
 		RTPIsStatic: false,
 		Priority:    10,
-		Disabled:    true,
 		FileExt:     "opus",
-	}, func(w media.PCM16Writer) media.WriteCloser[Sample] {
-		dec, err := Decode(w, 1, logger.GetLogger())
-		if err != nil {
-			return nil
+	}
+	media.RegisterCodec(media.NewCodec(info, nil, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
+		switch c.Channels {
+		default:
+			return media.CodecInfo{}, nil, false
+		case 0, 1, 2:
 		}
-		return dec
-	}, func(w media.WriteCloser[Sample]) media.PCM16Writer {
-		enc, err := Encode(w, 1, logger.GetLogger())
-		if err != nil {
-			return nil
+		const defRate = 48000
+		if c.SampleRate == 0 {
+			c.SampleRate = 48000
 		}
-		return enc
+		if c.SampleRate != defRate {
+			return media.CodecInfo{}, nil, false
+		}
+		// TODO: support codec parameters
+
+		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
+		info.Params = nil
+
+		create := media.NewAudioCodecFunc(info, func(w media.PCM16Writer) media.WriteCloser[Sample] {
+			dec, err := Decode(w, 1, logger.GetLogger())
+			if err != nil {
+				return nil
+			}
+			return dec
+		}, func(w media.WriteCloser[Sample]) media.PCM16Writer {
+			enc, err := Encode(w, 1, logger.GetLogger())
+			if err != nil {
+				return nil
+			}
+			return enc
+		})
+		return info, create, true
 	}))
 }

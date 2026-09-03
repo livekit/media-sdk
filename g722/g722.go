@@ -38,15 +38,31 @@ var (
 )
 
 func init() {
-	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:      SDPNameAndRate,
-		SampleRate:   16000,
-		RTPClockRate: 8000,
-		RTPDefType:   prtp.PayloadTypeG722,
-		RTPIsStatic:  true,
-		Priority:     -5,
-		FileExt:      "g722",
-	}, Decode, Encode))
+	info := media.CodecTypeInfo{
+		Name:        SDPNameOnly,
+		RTPDefType:  prtp.PayloadTypeG722,
+		RTPIsStatic: true,
+		Priority:    -5,
+		FileExt:     "g722",
+	}
+	media.RegisterCodec(media.NewCodec(info, nil, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
+		if c.Channels != 0 && c.Channels != 1 {
+			return media.CodecInfo{}, nil, false
+		}
+		const sdpRate = 8000 // known error in RFC
+		if c.SampleRate == 0 {
+			c.SampleRate = sdpRate
+		}
+		if c.SampleRate != sdpRate {
+			return media.CodecInfo{}, nil, false
+		}
+		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
+		info.SampleRate = 16000
+		info.RTPClockRate = sdpRate
+		info.Params = nil
+		create := media.NewAudioCodecFunc(info, Decode, Encode)
+		return info, create, true
+	}))
 }
 
 type Sample []byte

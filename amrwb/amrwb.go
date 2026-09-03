@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/livekit/amrwb-cgo"
 
@@ -39,20 +41,64 @@ const (
 )
 
 func init() {
-	media.RegisterCodec(media.NewAudioCodec(media.CodecInfo{
-		SDPName:     SDPNameAndRate,
-		SampleRate:  SampleRate,
+	info := media.CodecTypeInfo{
+		Name:        SDPNameOnly,
 		RTPIsStatic: false,
 		Priority:    -4,
 		FileExt:     "amrwb",
-		Disabled:    true,
-		ReqParams: []media.CodecParam{
-			{Key: "octet-align", Val: "0"},
-		},
-	}, func(w media.PCM16Writer) media.WriteCloser[Sample] {
-		return Decode(w, RTPBandwidthEfficient)
-	}, func(w media.WriteCloser[Sample]) media.PCM16Writer {
-		return Encode(w, RTPBandwidthEfficient)
+	}
+	media.RegisterCodec(media.NewAudioCodecType(info, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
+		if c.Channels != 0 && c.Channels != 1 {
+			return media.CodecInfo{}, nil, false
+		}
+		if c.SampleRate == 0 {
+			c.SampleRate = SampleRate
+		}
+		if c.SampleRate != SampleRate {
+			return media.CodecInfo{}, nil, false
+		}
+		const (
+			paramOctetAlign = "octet-align"
+			paramModeSet    = "mode-set"
+		)
+		var (
+			format   = RTPBandwidthEfficient
+			mode     = amrwb.Best
+			accepted media.CodecParams
+		)
+
+		// Select between bandwidth-efficient format (bit packing) and octet-aligned modes (align with pad bits).
+		if v, ok := c.Params.Get(paramOctetAlign); ok && v != "0" {
+			// TODO: support octet-aligned mode
+			return media.CodecInfo{}, nil, false
+		}
+		accepted.Add(paramOctetAlign, "0")
+
+		// Pick the best mode the peer can support.
+		// TODO: we should probably change the priority of the codec based on this as well
+		maxMode := -1
+		if v, ok := c.Params.Get(paramModeSet); ok {
+			for s := range strings.FieldsSeq(v) {
+				m, err := strconv.Atoi(s)
+				if err != nil {
+					return media.CodecInfo{}, nil, false
+				}
+				maxMode = max(m, maxMode)
+			}
+		}
+		if maxMode >= 0 {
+			mode = amrwb.Mode(maxMode)
+		}
+		accepted.Add(paramModeSet, strconv.Itoa(int(mode)))
+
+		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
+		info.Params = accepted
+		create := media.NewAudioCodecFunc(info, func(w media.PCM16Writer) media.WriteCloser[Sample] {
+			return Decode(w, format)
+		}, func(w media.WriteCloser[Sample]) media.PCM16Writer {
+			return EncodeWith(w, format, mode)
+		})
+		return info, create, true
 	}))
 }
 
