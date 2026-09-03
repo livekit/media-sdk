@@ -16,6 +16,7 @@ package sdp_test
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -437,8 +438,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 			require.Equal(t, c.exp, got)
 		})
 	}
-	t.Run("default offer", func(t *testing.T) {
-		_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+	t.Run("default offer and answer", func(t *testing.T) {
+		desc, offer, err := OfferMediaWith(g, port, EncryptionNone)
 		require.NoError(t, err)
 		require.Equal(t, &sdp.MediaDescription{
 			MediaName: sdp.MediaName{
@@ -461,6 +462,42 @@ func TestSDPMediaAnswer(t *testing.T) {
 				{Key: "sendrecv"},
 			},
 		}, offer)
+
+		var audioCodecs []string
+		for _, c := range desc.Codecs {
+			name := ""
+			if cc := c.Codec; cc != nil {
+				name = cc.Info().SDPName
+			}
+			audioCodecs = append(audioCodecs, fmt.Sprintf("%d = %s", int(c.Type), name))
+		}
+		require.Equal(t, []string{
+			"101 = AMR-WB/16000",
+			"9 = G722/8000",
+			"0 = PCMU/8000",
+			"8 = PCMA/8000",
+		}, audioCodecs)
+
+		ac, err := SelectAudio(desc, true)
+		require.NoError(t, err)
+		const port2 = 9000
+		answer := AnswerMedia(port2, ac, nil)
+		require.Equal(t, &sdp.MediaDescription{
+			MediaName: sdp.MediaName{
+				Media:   "audio",
+				Port:    sdp.RangedPort{Value: port2},
+				Protos:  []string{"RTP", "AVP"},
+				Formats: []string{"101", "103"},
+			},
+			Attributes: []sdp.Attribute{
+				{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+				{Key: "fmtp", Value: "101 octet-align=0"},
+				{Key: "rtpmap", Value: "103 telephone-event/16000"},
+				{Key: "fmtp", Value: "103 0-16"},
+				{Key: "ptime", Value: "20"},
+				{Key: "sendrecv"},
+			},
+		}, answer)
 	})
 }
 
