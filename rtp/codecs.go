@@ -17,16 +17,17 @@ package rtp
 import (
 	"fmt"
 
-	"github.com/livekit/media-sdk"
 	"github.com/pion/rtp"
+
+	"github.com/livekit/media-sdk"
 )
 
 var (
-	codecByType [0xff]media.Codec
+	codecByType [0xff]media.CodecType
 )
 
 func init() {
-	media.OnRegister(func(c media.Codec) {
+	media.OnRegister(func(c media.CodecType) {
 		info := c.Info()
 		if info.RTPIsStatic {
 			codecByType[info.RTPDefType] = c
@@ -34,7 +35,7 @@ func init() {
 	})
 }
 
-func CodecByPayloadType(typ byte) media.Codec {
+func CodecByPayloadType(typ byte) media.CodecType {
 	return codecByType[typ]
 }
 

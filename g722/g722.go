@@ -40,6 +40,7 @@ var (
 func init() {
 	info := media.CodecTypeInfo{
 		Name:        SDPNameOnly,
+		Kind:        media.Audio,
 		RTPDefType:  prtp.PayloadTypeG722,
 		RTPIsStatic: true,
 		Priority:    -5,

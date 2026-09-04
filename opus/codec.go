@@ -30,6 +30,7 @@ const (
 func init() {
 	info := media.CodecTypeInfo{
 		Name:        SDPNameOnly,
+		Kind:        media.Audio,
 		RTPIsStatic: false,
 		Priority:    10,
 		FileExt:     "opus",

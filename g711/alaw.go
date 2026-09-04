@@ -32,6 +32,7 @@ const (
 func init() {
 	info := media.CodecTypeInfo{
 		Name:        ALawSDPNameOnly,
+		Kind:        media.Audio,
 		RTPDefType:  prtp.PayloadTypePCMA,
 		RTPIsStatic: true,
 		Priority:    -20,

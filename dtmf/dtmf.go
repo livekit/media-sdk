@@ -34,10 +34,11 @@ const (
 func init() {
 	info := media.CodecTypeInfo{
 		Name:        SDPNameOnly,
+		Kind:        media.Data,
 		RTPIsStatic: false,
 		Priority:    -100, // let it be last in SDP
 	}
-	media.RegisterCodec(media.NewCodec(info, func(s *media.CodecSet) []media.CodecConfig {
+	media.RegisterCodec(media.NewCodec(info, func(s *media.CodecSet) []media.CodecInfo {
 		// Check rates that other codecs advertise.
 		var rates []int
 		for _, c := range s.ListEnabled() {
@@ -56,9 +57,10 @@ func init() {
 			}
 		}
 		slices.Sort(rates)
-		out := make([]media.CodecConfig, 0, len(rates))
+		out := make([]media.CodecInfo, 0, len(rates))
 		for _, rate := range rates {
-			out = append(out, media.CodecConfig{SampleRate: rate})
+			cc := media.CodecConfig{SampleRate: rate, Params: []media.CodecParam{{Key: "0-16"}}}
+			out = append(out, media.CodecInfo{CodecTypeInfo: info, CodecConfig: cc})
 		}
 		return out
 	}, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
@@ -67,13 +69,13 @@ func init() {
 			return media.CodecInfo{}, nil, false
 		}
 		const rateInc = 8000
-		if c.SampleRate%rateInc == 0 {
+		if c.SampleRate%rateInc != 0 {
 			return media.CodecInfo{}, nil, false
 		}
 		i := c.SampleRate / rateInc
 		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
 		info.Priority -= i // order by rate
-		info.Params = nil  // TODO: currently handled externally
+		info.Params = []media.CodecParam{{Key: "0-16"}}
 		return info, nil, true
 	}))
 }

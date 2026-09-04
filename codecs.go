@@ -20,6 +20,14 @@ import (
 	"strings"
 )
 
+type Kind int
+
+const (
+	Unknown = Kind(iota)
+	Audio
+	Data
+)
+
 type CodecParams []CodecParam
 
 func (arr CodecParams) String() string {
@@ -87,6 +95,7 @@ type CodecConfig struct {
 
 type CodecTypeInfo struct {
 	Name        string // codec name for SDP, must not contain '/' parameters
+	Kind        Kind
 	RTPDefType  byte
 	RTPIsStatic bool
 	Priority    int // higher is preferable
@@ -104,7 +113,7 @@ func (c *CodecTypeInfo) Info() CodecTypeInfo {
 }
 
 type CreateFunc func() Codec
-type OfferFunc func(s *CodecSet) []CodecConfig
+type OfferFunc func(s *CodecSet) []CodecInfo
 type SupportsFunc func(c CodecConfig) (CodecInfo, CreateFunc, bool)
 
 type CodecType interface {
@@ -113,7 +122,7 @@ type CodecType interface {
 	// Info returns static information about this codec.
 	Info() CodecTypeInfo
 	// Offer lists the default set of codec configurations for SDP offers.
-	Offer(s *CodecSet) []CodecConfig
+	Offer(s *CodecSet) []CodecInfo
 	// Supports checks if a given codec configuration is supported.
 	// It returns full codec information for it with accepted configuration, and a constructor for creating the codec.
 	Supports(c CodecConfig) (CodecInfo, CreateFunc, bool)
@@ -137,7 +146,14 @@ func (c *CodecInfo) SDPFullName() string {
 }
 
 func (c *CodecInfo) Info() CodecInfo {
+	c.Defaults()
 	return *c
+}
+
+func (c *CodecInfo) Defaults() {
+	if c.RTPClockRate == 0 {
+		c.RTPClockRate = c.SampleRate
+	}
 }
 
 // Codec is a configured instance of a CodecType.
@@ -179,6 +195,9 @@ func (s *CodecSet) NewSet() *CodecSet {
 
 // SetEnabled enables or disables a given codec.
 func (s *CodecSet) SetEnabled(name string, enabled bool) {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		name = name[:i]
+	}
 	name = strings.ToLower(name)
 	s.enabled[name] = enabled
 }
@@ -194,6 +213,9 @@ func (s *CodecSet) SetEnabledMap(codecs map[string]bool) {
 func (s *CodecSet) IsEnabledByName(name string) bool {
 	if s == nil {
 		return false
+	}
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		name = name[:i]
 	}
 	name = strings.ToLower(name)
 	for s := s; s != nil; s = s.parent {
@@ -277,14 +299,24 @@ func RegisterCodec(c CodecType) {
 
 // NewCodec creates a generic codec definition without a specific implementation.
 func NewCodec(info CodecTypeInfo, offer OfferFunc, support SupportsFunc) CodecType {
+	if info.Name == "" {
+		panic("codec name must be specified")
+	}
+	if strings.ContainsAny(info.Name, " /") {
+		panic("invalid codec name: must not contain '/' or spaces")
+	}
+	if info.Kind == Unknown {
+		panic("codec kind must be specified")
+	}
 	if offer == nil {
 		// Use default config that SupportsFunc generates.
-		offer = func(c *CodecSet) []CodecConfig {
+		offer = func(c *CodecSet) []CodecInfo {
 			info, _, ok := support(CodecConfig{})
 			if !ok {
 				return nil // no default
 			}
-			return []CodecConfig{info.CodecConfig}
+			info.Defaults()
+			return []CodecInfo{info}
 		}
 	}
 	return &baseCodecType{CodecTypeInfo: info, offer: offer, support: support}
@@ -296,13 +328,21 @@ type baseCodecType struct {
 	support SupportsFunc
 }
 
-func (t *baseCodecType) Offer(s *CodecSet) []CodecConfig {
+func (t *baseCodecType) Offer(s *CodecSet) []CodecInfo {
 	if !s.IsEnabled(t) {
 		return nil
 	}
-	return t.offer(s)
+	out := t.offer(s)
+	for i := range out {
+		out[i].Defaults()
+	}
+	return out
 }
 
 func (t *baseCodecType) Supports(c CodecConfig) (CodecInfo, CreateFunc, bool) {
-	return t.support(c)
+	info, create, ok := t.support(c)
+	if ok {
+		info.Defaults()
+	}
+	return info, create, ok
 }

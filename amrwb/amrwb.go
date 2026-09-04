@@ -43,11 +43,12 @@ const (
 func init() {
 	info := media.CodecTypeInfo{
 		Name:        SDPNameOnly,
+		Kind:        media.Audio,
 		RTPIsStatic: false,
 		Priority:    -4,
 		FileExt:     "amrwb",
 	}
-	media.RegisterCodec(media.NewAudioCodecType(info, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
+	media.RegisterCodec(media.NewCodec(info, nil, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
 		if c.Channels != 0 && c.Channels != 1 {
 			return media.CodecInfo{}, nil, false
 		}
@@ -78,7 +79,10 @@ func init() {
 		// TODO: we should probably change the priority of the codec based on this as well
 		maxMode := -1
 		if v, ok := c.Params.Get(paramModeSet); ok {
-			for s := range strings.FieldsSeq(v) {
+			for s := range strings.SplitSeq(v, ",") {
+				if s == "" {
+					continue
+				}
 				m, err := strconv.Atoi(s)
 				if err != nil {
 					return media.CodecInfo{}, nil, false
