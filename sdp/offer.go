@@ -53,6 +53,15 @@ type CodecInfo struct {
 	Info  media.CodecInfo
 }
 
+func (c *CodecInfo) Equals(c2 *CodecInfo) bool {
+	if c == nil && c2 == nil {
+		return true
+	} else if c == nil || c2 == nil {
+		return false
+	}
+	return c.Type == c2.Type && c.Info.Equals(&c2.Info)
+}
+
 // OfferCodecsWith lists enabled codecs in the set for the SDP offer and assigns payload types to them.
 func OfferCodecsWith(s *media.CodecSet) []CodecInfo {
 	if s == nil {
@@ -831,11 +840,6 @@ type MediaConfig struct {
 	Audio         AudioConfig
 	Crypto        *srtp.Config
 	PeerDirection sdp.Direction // RFC 3264, offer direction for server, answer direction for client
-}
-
-type DTMFInfo struct {
-	Type byte
-	Rate int
 }
 
 type AudioConfig struct {

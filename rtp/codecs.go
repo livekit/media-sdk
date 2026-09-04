@@ -60,6 +60,34 @@ func (d *rawHandler) HandleRTP(h *rtp.Header, payload []byte) error {
 	return d.w.WriteRaw(payload)
 }
 
+func initCodec(t media.CodecType, cc media.CodecConfig) (media.AudioCodec, error) {
+	_, create, ok := t.Supports(cc)
+	if !ok {
+		return nil, fmt.Errorf("no support for PCM codec %q", t.SDPName())
+	}
+	ac, ok := create().(media.AudioCodec)
+	if !ok {
+		return nil, fmt.Errorf("cannot use codec %q for audio", t.SDPName())
+	}
+	return ac, nil
+}
+
+func DecodePCMWithCodec(w media.PCM16Writer, t media.CodecType, cc media.CodecConfig, typ byte) (HandlerCloser, error) {
+	ac, err := initCodec(t, cc)
+	if err != nil {
+		return nil, err
+	}
+	return DecodePCM(w, ac, typ), nil
+}
+
+func EncodePCMWithCodec(w *Stream, t media.CodecType, cc media.CodecConfig) (media.PCM16Writer, error) {
+	ac, err := initCodec(t, cc)
+	if err != nil {
+		return nil, err
+	}
+	return EncodePCM(w, ac), nil
+}
+
 func DecodePCM(w media.PCM16Writer, c media.AudioCodec, typ byte) HandlerCloser {
 	return HandlePayload(c.DecodeBytes(w), typ)
 }

@@ -75,6 +75,19 @@ func (arr *CodecParams) Add(key, val string) {
 	*arr = append(*arr, CodecParam{Key: key, Val: val})
 }
 
+func (arr CodecParams) Equals(arr2 CodecParams) bool {
+	if len(arr) != len(arr2) {
+		return false
+	}
+	for i := range arr {
+		p1, p2 := arr[i], arr2[i]
+		if p1 != p2 {
+			return false
+		}
+	}
+	return true
+}
+
 type CodecParam struct {
 	Key string
 	Val string
@@ -93,6 +106,17 @@ type CodecConfig struct {
 	Params     CodecParams // a list of codec params (fmtp)
 }
 
+func (c *CodecConfig) Equals(c2 *CodecConfig) bool {
+	if c == nil && c2 == nil {
+		return true
+	} else if c == nil || c2 == nil {
+		return false
+	}
+	return c.SampleRate == c2.SampleRate &&
+		c.Channels == c2.Channels &&
+		c.Params.Equals(c2.Params)
+}
+
 type CodecTypeInfo struct {
 	Name        string // codec name for SDP, must not contain '/' parameters
 	Kind        Kind
@@ -102,14 +126,14 @@ type CodecTypeInfo struct {
 	FileExt     string
 }
 
-func (c *CodecTypeInfo) String() string {
+func (c CodecTypeInfo) String() string {
 	return c.SDPName()
 }
-func (c *CodecTypeInfo) SDPName() string {
+func (c CodecTypeInfo) SDPName() string {
 	return c.Name
 }
-func (c *CodecTypeInfo) Info() CodecTypeInfo {
-	return *c
+func (c CodecTypeInfo) Info() CodecTypeInfo {
+	return c
 }
 
 type CreateFunc func() Codec
@@ -134,26 +158,35 @@ type CodecInfo struct {
 	RTPClockRate int
 }
 
-func (c *CodecInfo) String() string {
+func (c CodecInfo) String() string {
 	return c.SDPFullName()
 }
 
-func (c *CodecInfo) SDPFullName() string {
+func (c CodecInfo) SDPFullName() string {
 	if c.Channels == 0 {
 		return fmt.Sprintf("%s/%d", c.SDPName(), c.RTPClockRate)
 	}
 	return fmt.Sprintf("%s/%d/%d", c.SDPName(), c.RTPClockRate, c.Channels)
 }
 
-func (c *CodecInfo) Info() CodecInfo {
+func (c CodecInfo) Info() CodecInfo {
 	c.Defaults()
-	return *c
+	return c
 }
 
 func (c *CodecInfo) Defaults() {
 	if c.RTPClockRate == 0 {
 		c.RTPClockRate = c.SampleRate
 	}
+}
+
+func (c *CodecInfo) Equals(c2 *CodecInfo) bool {
+	if c == nil && c2 == nil {
+		return true
+	} else if c == nil || c2 == nil {
+		return false
+	}
+	return c.Name == c2.Name && c.CodecConfig.Equals(&c2.CodecConfig)
 }
 
 // Codec is a configured instance of a CodecType.
