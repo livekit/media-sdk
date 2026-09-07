@@ -50,16 +50,19 @@ func init() {
 		if c.Channels != 0 && c.Channels != 1 {
 			return media.CodecInfo{}, nil, false
 		}
-		const sdpRate = 8000 // known error in RFC
+		const (
+			realRate = 16000
+			rtpRate  = 8000 // known error in RFC
+		)
 		if c.SampleRate == 0 {
-			c.SampleRate = sdpRate
+			c.SampleRate = realRate
 		}
-		if c.SampleRate != sdpRate {
+		if c.SampleRate != rtpRate && c.SampleRate != realRate {
 			return media.CodecInfo{}, nil, false
 		}
 		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
-		info.SampleRate = 16000
-		info.RTPClockRate = sdpRate
+		info.SampleRate = realRate
+		info.RTPClockRate = rtpRate
 		info.Params = nil
 		create := media.NewAudioCodecFunc(info, Decode, Encode)
 		return info, create, true
