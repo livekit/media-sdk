@@ -47,7 +47,7 @@ func init() {
 				continue
 			}
 			for _, cc := range c.Offer(s) {
-				rate := cc.SampleRate
+				rate := cc.RTPClockRate
 				if rate <= 0 {
 					continue
 				}
