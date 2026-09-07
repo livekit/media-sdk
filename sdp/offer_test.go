@@ -30,6 +30,7 @@ import (
 
 	"github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/amrwb"
+	"github.com/livekit/media-sdk/dtmf"
 	"github.com/livekit/media-sdk/g711"
 	"github.com/livekit/media-sdk/g722"
 	"github.com/livekit/media-sdk/rtp"
@@ -68,7 +69,7 @@ func TestSDPMediaOffer(t *testing.T) {
 		},
 		Attributes: []sdp.Attribute{
 			{Key: "rtpmap", Value: "101 AMR-WB/16000"},
-			{Key: "fmtp", Value: "101 octet-align=0"},
+			{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
 			{Key: "rtpmap", Value: "9 G722/8000"},
 			{Key: "rtpmap", Value: "0 PCMU/8000"},
 			{Key: "rtpmap", Value: "8 PCMA/8000"},
@@ -96,7 +97,7 @@ func TestSDPMediaOffer(t *testing.T) {
 		},
 		Attributes: []sdp.Attribute{
 			{Key: "rtpmap", Value: "101 AMR-WB/16000"},
-			{Key: "fmtp", Value: "101 octet-align=0"},
+			{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
 			{Key: "rtpmap", Value: "9 G722/8000"},
 			{Key: "rtpmap", Value: "0 PCMU/8000"},
 			{Key: "rtpmap", Value: "8 PCMA/8000"},
@@ -116,6 +117,7 @@ func TestSDPMediaOffer(t *testing.T) {
 	g2 := g.NewSet()
 	g2.SetEnabled(g722.SDPNameAndRate, false)
 	g2.SetEnabled(amrwb.SDPNameAndRate, false)
+	g2.SetEnabled("opus", false)
 
 	_, offer, err = OfferMediaWith(g2, port, EncryptionNone)
 	require.NoError(t, err)
@@ -137,13 +139,77 @@ func TestSDPMediaOffer(t *testing.T) {
 	}, offer)
 }
 
-func getCodec(s *media.CodecSet, name string, params ...media.CodecParam) media.AudioCodec {
-	return CodecByNameWith(s, name, params).(media.AudioCodec)
+func getCodec(s *media.CodecSet, name string) media.CodecType {
+	return CodecByNameWith(s, name)
+}
+
+func dtmfCodec(s *media.CodecSet, typ byte, rate, ch int) *CodecInfo {
+	const name = dtmf.SDPNameOnly
+	c := getCodec(s, name)
+	ci := c.Info()
+	return &CodecInfo{
+		Type:  typ,
+		Codec: c,
+		Info: media.CodecInfo{
+			CodecTypeInfo: media.CodecTypeInfo{
+				Name:     name,
+				Kind:     media.Data,
+				Priority: ci.Priority - rate/8000,
+				FileExt:  ci.FileExt,
+			},
+			CodecConfig: media.CodecConfig{
+				SampleRate: rate,
+				Channels:   ch,
+				Params:     media.CodecParams{{Key: "0-16"}},
+			},
+			RTPClockRate: rate,
+		},
+	}
+}
+
+func staticCodec(s *media.CodecSet, typ byte, name string, rtpRate int, cc media.CodecConfig) CodecInfo {
+	c := getCodec(s, name)
+	ci := c.Info()
+	return CodecInfo{
+		Type:  typ,
+		Codec: c,
+		Info: media.CodecInfo{
+			CodecTypeInfo: media.CodecTypeInfo{
+				Name:        name,
+				Kind:        media.Audio,
+				RTPDefType:  typ,
+				RTPIsStatic: true,
+				Priority:    ci.Priority,
+				FileExt:     ci.FileExt,
+			},
+			CodecConfig:  cc,
+			RTPClockRate: rtpRate,
+		},
+	}
+}
+func dynamicCodec(s *media.CodecSet, typ byte, name string, rtpRate int, cc media.CodecConfig) CodecInfo {
+	c := getCodec(s, name)
+	ci := c.Info()
+	return CodecInfo{
+		Type:  typ,
+		Codec: c,
+		Info: media.CodecInfo{
+			CodecTypeInfo: media.CodecTypeInfo{
+				Name:     name,
+				Kind:     media.Audio,
+				Priority: ci.Priority,
+				FileExt:  ci.FileExt,
+			},
+			CodecConfig:  cc,
+			RTPClockRate: rtpRate,
+		},
+	}
 }
 
 func TestSDPMediaAnswer(t *testing.T) {
 	g := codecSet()
 	const port = 12345
+
 	cases := []struct {
 		name  string
 		offer sdp.MediaDescription
@@ -162,9 +228,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g722.SDPNameAndRate),
-				Type:  9,
-				DTMF:  &DTMFInfo{Type: 101, Rate: 8000},
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
 			},
 		},
 		{
@@ -180,9 +245,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g722.SDPNameAndRate),
-				Type:  9,
-				DTMF:  &DTMFInfo{Type: 101, Rate: 8000},
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
 			},
 		},
 		{
@@ -197,8 +261,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g722.SDPNameAndRate),
-				Type:  9,
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
 			},
 		},
 		{
@@ -214,9 +277,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g722.SDPNameAndRate),
-				Type:  9,
-				DTMF:  &DTMFInfo{Type: 103, Rate: 8000},
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 103, 8000, 0),
 			},
 		},
 		{
@@ -232,9 +294,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g711.ULawSDPNameAndRate),
-				Type:  0,
-				DTMF:  &DTMFInfo{Type: 101, Rate: 8000},
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
 			},
 		},
 		{
@@ -250,9 +311,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g722.SDPNameAndRate),
-				Type:  9,
-				DTMF:  &DTMFInfo{Type: 101, Rate: 8000},
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
 			},
 		},
 		{
@@ -279,9 +339,8 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g711.ULawSDPNameAndRate),
-				Type:  0,
-				DTMF:  &DTMFInfo{Type: 101, Rate: 8000},
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
 			},
 		},
 		{
@@ -293,13 +352,12 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g711.ULawSDPNameAndRate),
-				Type:  0,
-				DTMF:  &DTMFInfo{Type: 101, Rate: 8000},
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000, Channels: 1}),
+				DTMF:      dtmfCodec(g, 101, 8000, 1),
 			},
 		},
 		{
-			name: "changed order",
+			name: "changed order g722",
 			offer: sdp.MediaDescription{
 				MediaName: sdp.MediaName{
 					Formats: []string{"0", "9"},
@@ -310,8 +368,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g711.ULawSDPNameAndRate),
-				Type:  0,
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
 			},
 		},
 		{
@@ -326,8 +383,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				Codec: getCodec(g, g711.ALawSDPNameAndRate),
-				Type:  8,
+				CodecInfo: staticCodec(g, 8, g711.ALawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
 			},
 		},
 		{
@@ -343,8 +399,9 @@ func TestSDPMediaAnswer(t *testing.T) {
 			},
 			exp: &AudioConfig{
 				// Pick AMR-WB, assume missing parameter matches ours.
-				Codec: getCodec(g, amrwb.SDPNameAndRate, media.CodecParam{"octet-align", "0"}),
-				Type:  101,
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
 			},
 		},
 		{
@@ -362,9 +419,10 @@ func TestSDPMediaAnswer(t *testing.T) {
 			},
 			exp: &AudioConfig{
 				// Pick AMR-WB, assume missing parameter matches ours.
-				Codec: getCodec(g, amrwb.SDPNameAndRate, media.CodecParam{"octet-align", "0"}),
-				Type:  101,
-				DTMF:  &DTMFInfo{Type: 104, Rate: 16000},
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
+				DTMF: dtmfCodec(g, 104, 16000, 0),
 			},
 		},
 		{
@@ -381,9 +439,10 @@ func TestSDPMediaAnswer(t *testing.T) {
 			},
 			exp: &AudioConfig{
 				// Pick AMR-WB, assume missing parameter matches ours.
-				Codec: getCodec(g, amrwb.SDPNameAndRate, media.CodecParam{"octet-align", "0"}),
-				Type:  101,
-				DTMF:  &DTMFInfo{Type: 103, Rate: 8000},
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
+				DTMF: dtmfCodec(g, 103, 8000, 0),
 			},
 		},
 		{
@@ -400,8 +459,9 @@ func TestSDPMediaAnswer(t *testing.T) {
 			},
 			exp: &AudioConfig{
 				// Pick AMR-WB, encoding matches, ignore other params.
-				Codec: getCodec(g, amrwb.SDPNameAndRate, media.CodecParam{"octet-align", "0"}),
-				Type:  101,
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
 			},
 		},
 		{
@@ -417,9 +477,27 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				// Pick PCMU, encoding doesn't match.
-				Codec: getCodec(g, g711.ULawSDPNameAndRate),
-				Type:  0,
+				// Pick PCMU, AMR-WB encoding doesn't match.
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+			},
+		},
+		{
+			name: "amrwb mode set",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "fmtp", Value: "101 octet-align=0;mode-set=0,1,2;mode-change-capability=2"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				// Pick AMR-WB and the highest mode available.
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "2"},
+				}}),
 			},
 		},
 	}
@@ -438,6 +516,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 			require.Equal(t, c.exp, got)
 		})
 	}
+
 	t.Run("default offer and answer", func(t *testing.T) {
 		desc, offer, err := OfferMediaWith(g, port, EncryptionNone)
 		require.NoError(t, err)
@@ -450,7 +529,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 			},
 			Attributes: []sdp.Attribute{
 				{Key: "rtpmap", Value: "101 AMR-WB/16000"},
-				{Key: "fmtp", Value: "101 octet-align=0"},
+				{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
 				{Key: "rtpmap", Value: "9 G722/8000"},
 				{Key: "rtpmap", Value: "0 PCMU/8000"},
 				{Key: "rtpmap", Value: "8 PCMA/8000"},
@@ -464,12 +543,13 @@ func TestSDPMediaAnswer(t *testing.T) {
 		}, offer)
 
 		var audioCodecs []string
-		for _, c := range desc.Codecs {
+		for _, c := range desc.Audio {
 			name := ""
+			rate := c.Info.RTPClockRate
 			if cc := c.Codec; cc != nil {
-				name = cc.Info().SDPName
+				name = cc.SDPName()
 			}
-			audioCodecs = append(audioCodecs, fmt.Sprintf("%d = %s", int(c.Type), name))
+			audioCodecs = append(audioCodecs, fmt.Sprintf("%d = %s/%d", int(c.Type), name, rate))
 		}
 		require.Equal(t, []string{
 			"101 = AMR-WB/16000",
@@ -491,7 +571,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 			},
 			Attributes: []sdp.Attribute{
 				{Key: "rtpmap", Value: "101 AMR-WB/16000"},
-				{Key: "fmtp", Value: "101 octet-align=0"},
+				{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
 				{Key: "rtpmap", Value: "103 telephone-event/16000"},
 				{Key: "fmtp", Value: "103 0-16"},
 				{Key: "ptime", Value: "20"},
@@ -515,9 +595,8 @@ func TestSDPMediaAnswerOneDisabled(t *testing.T) {
 		},
 	}
 	exp := &AudioConfig{
-		Codec: getCodec(g, g711.ULawSDPNameAndRate),
-		Type:  0,
-		DTMF:  &DTMFInfo{Type: 101, Rate: 8000},
+		CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+		DTMF:      dtmfCodec(g, 101, 8000, 0),
 	}
 
 	noG722 := g.NewSet()

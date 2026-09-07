@@ -39,33 +39,24 @@ type AudioFrameCodec[S BytesFrame] interface {
 type AudioDecodeFunc[S Frame] func(w PCM16Writer) WriteCloser[S]
 type AudioEncodeFunc[S Frame] func(w WriteCloser[S]) PCM16Writer
 
-// NewAudioCodec creates an audio codec with a given encode and decode implementations.
-func NewAudioCodec[S BytesFrame](
-	info CodecInfo,
-	decode AudioDecodeFunc[S],
-	encode AudioEncodeFunc[S],
-) AudioFrameCodec[S] {
-	if info.SampleRate <= 0 {
-		panic("invalid sample rate")
-	}
+// NewAudioCodecFunc is a helper to define a CreateFunc for an audio codec.
+func NewAudioCodecFunc[S BytesFrame](info CodecInfo, decode AudioDecodeFunc[S], encode AudioEncodeFunc[S]) CreateFunc {
 	if info.RTPClockRate == 0 {
 		info.RTPClockRate = info.SampleRate
 	}
-	return &audioCodec[S]{
-		info:   info,
-		encode: encode,
-		decode: decode,
+	return func() Codec {
+		return &audioCodec[S]{
+			CodecInfo: info,
+			decode:    decode,
+			encode:    encode,
+		}
 	}
 }
 
 type audioCodec[S BytesFrame] struct {
-	info   CodecInfo
+	CodecInfo
 	decode AudioDecodeFunc[S]
 	encode AudioEncodeFunc[S]
-}
-
-func (c *audioCodec[S]) Info() CodecInfo {
-	return c.info
 }
 
 func (c *audioCodec[S]) Encode(w WriteCloser[S]) PCM16Writer {
@@ -77,7 +68,7 @@ func (c *audioCodec[S]) Decode(w PCM16Writer) WriteCloser[S] {
 }
 
 func (c *audioCodec[S]) EncodeBytes(w BytesWriter) PCM16Writer {
-	bw := EncodeBytes[S](w, c.info.SampleRate)
+	bw := EncodeBytes[S](w, c.SampleRate)
 	return c.encode(bw)
 }
 

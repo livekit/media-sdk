@@ -17,9 +17,9 @@ package dtmf
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/livekit/media-sdk"
@@ -32,16 +32,52 @@ const (
 )
 
 func init() {
-	for i, rate := range []int{
-		8000, 16000, 48000,
-	} {
-		media.RegisterCodec(media.NewCodec(media.CodecInfo{
-			SDPName:     fmt.Sprintf("%s/%d", SDPNameOnly, rate),
-			SampleRate:  rate,
-			RTPIsStatic: false,
-			Priority:    -100 - i, // let it be last in SDP
-		}))
+	info := media.CodecTypeInfo{
+		Name:        SDPNameOnly,
+		Kind:        media.Data,
+		RTPIsStatic: false,
+		Priority:    -100, // let it be last in SDP
 	}
+	media.RegisterCodec(media.NewCodec(info, func(s *media.CodecSet) []media.CodecInfo {
+		// Check rates that other codecs advertise.
+		var rates []int
+		for _, c := range s.ListEnabled() {
+			name := c.SDPName()
+			if name == SDPNameOnly {
+				continue
+			}
+			for _, cc := range c.Offer(s) {
+				rate := cc.SampleRate
+				if rate <= 0 {
+					continue
+				}
+				if !slices.Contains(rates, rate) {
+					rates = append(rates, rate)
+				}
+			}
+		}
+		slices.Sort(rates)
+		out := make([]media.CodecInfo, 0, len(rates))
+		for _, rate := range rates {
+			cc := media.CodecConfig{SampleRate: rate, Params: []media.CodecParam{{Key: "0-16"}}}
+			out = append(out, media.CodecInfo{CodecTypeInfo: info, CodecConfig: cc})
+		}
+		return out
+	}, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
+		if c.SampleRate == 0 {
+			// Rate must be set from the audio codec.
+			return media.CodecInfo{}, nil, false
+		}
+		const rateInc = 8000
+		if c.SampleRate%rateInc != 0 {
+			return media.CodecInfo{}, nil, false
+		}
+		i := c.SampleRate / rateInc
+		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
+		info.Priority -= i // order by rate
+		info.Params = []media.CodecParam{{Key: "0-16"}}
+		return info, nil, true
+	}))
 }
 
 const (
