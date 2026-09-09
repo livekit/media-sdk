@@ -31,6 +31,13 @@ const (
 	SDPNameOnly = "telephone-event"
 )
 
+// TODO(dennwc): These belong to a codec-specific offer/answer config. Consider adding argument to OfferFunc.
+
+var (
+	// OfferLegacyRate forces DTMF to advertise/negotiate 8000 sample rate, even if the codec has a higher sample rate.
+	OfferLegacyRate = false
+)
+
 func init() {
 	info := media.CodecTypeInfo{
 		Name:        SDPNameOnly,
@@ -41,6 +48,9 @@ func init() {
 	media.RegisterCodec(media.NewCodec(info, func(s *media.CodecSet) []media.CodecInfo {
 		// Check rates that other codecs advertise.
 		var rates []int
+		if OfferLegacyRate {
+			rates = append(rates, 8000)
+		}
 		for _, c := range s.ListEnabled() {
 			name := c.SDPName()
 			if name == SDPNameOnly {
