@@ -343,6 +343,12 @@ func (s *stream) discont() {
 	s.seq += math.MaxUint16 / 2
 }
 
+// jumpBack moves the next sequence number n behind the current one, emulating a
+// new source (transfer) whose sequence space happens to start behind the old one.
+func (s *stream) jumpBack(n uint16) {
+	s.seq -= n
+}
+
 const defaultPacketSize = 200
 
 var headerBytes = []byte{0xaa, 0xaa}
@@ -367,4 +373,57 @@ func (d *testDepacketizer) IsPartitionHead(payload []byte) bool {
 
 func (d *testDepacketizer) IsPartitionTail(marker bool, _ []byte) bool {
 	return marker
+}
+
+// A B2BUA transfer swaps the source mid-call; the new stream's sequence numbers
+// are unrelated to the old ones. When they land behind prevSN (up to 32768
+// behind) every packet was rejected as expired, and because drops never advance
+// prevSN the buffer stayed muted until the new stream caught up.
+func TestBackwardDiscontinuity(t *testing.T) {
+	out := make(chan []ExtPacket, 100)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := newTestStream()
+
+	i := 0
+	for ; i < 50; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+	s.jumpBack(8618) // captured call: 21294 -> 12676
+	for ; i < 100; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:  100,
+		PacketsLost:    0,
+		PacketsDropped: 0,
+		PacketsPopped:  100,
+		SamplesPopped:  100,
+	})
+}
+
+// A packet that is a little behind prevSN is still a late packet and must be dropped.
+func TestLatePacketStillDropped(t *testing.T) {
+	out := make(chan []ExtPacket, 100)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := newTestStream()
+
+	for i := 0; i < 20; i++ {
+		b.Push(s.gen(true, true))
+		checkSample(t, out, 1)
+	}
+	late := s.gen(true, true)
+	late.SequenceNumber -= 5 // already popped
+	b.Push(late)
+	checkSample(t, out, 0)
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:  21,
+		PacketsLost:    0,
+		PacketsDropped: 1,
+		PacketsPopped:  20,
+		SamplesPopped:  20,
+	})
 }
