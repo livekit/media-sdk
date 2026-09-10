@@ -152,6 +152,16 @@ func TestResample(t *testing.T) {
 
 }
 
+func removeAfterTest(t testing.TB, path string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+		_ = os.Remove(path)
+	})
+}
+
 func writePCM16s(t testing.TB, path string, buf []media.PCM16Sample) string {
 	var out []byte
 	for _, frame := range buf {
@@ -163,6 +173,7 @@ func writePCM16s(t testing.TB, path string, buf []media.PCM16Sample) string {
 	}
 	err := os.WriteFile(path, out, 0644)
 	require.NoError(t, err)
+	removeAfterTest(t, path)
 	h := sha256.Sum256(out)
 	return hex.EncodeToString(h[:])[:8]
 }
@@ -171,6 +182,7 @@ func writePCM16sWebm(t testing.TB, path string, rate int, buf []media.PCM16Sampl
 	f, err := os.Create(path)
 	require.NoError(t, err)
 	defer f.Close()
+	removeAfterTest(t, path)
 
 	w := webm.NewPCM16Writer(f, rate, 1, media.DefFrameDur)
 	defer w.Close()
