@@ -227,12 +227,23 @@ func encodeAMR(t testing.TB, format amrwb.Format, mode amrwb.Mode, frames []medi
 	return blocks
 }
 
+func removeAfterTest(t testing.TB, name string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+		_ = os.Remove(name)
+	})
+}
+
 func dumpAMR(t testing.TB, name string, blocks []Sample) string {
 	f, err := os.Create(name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	removeAfterTest(t, name)
 
 	h := sha1.New()
 	bw := bufio.NewWriter(io.MultiWriter(f, h))
@@ -272,6 +283,7 @@ func dumpPCM(t testing.TB, name string, data []media.PCM16Sample) string {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	removeAfterTest(t, name)
 
 	h := sha1.New()
 	bw := bufio.NewWriter(io.MultiWriter(f, h))
@@ -295,13 +307,14 @@ func ffmpegAMRFileToOGG(t testing.TB, name string) {
 		t.Log("ffmpeg not found in $PATH")
 		return
 	}
+	out := name + ".ogg"
+	removeAfterTest(t, out)
 	err := exec.Command("ffmpeg",
-		"-i", name, name+".ogg",
+		"-nostdin", "-y",
+		"-i", name, out,
 	).Run()
 	if err != nil {
 		t.Error(err)
-	} else {
-		os.Remove(name)
 	}
 }
 
@@ -310,13 +323,14 @@ func ffmpegPCMFileToOGG(t testing.TB, name string) {
 		t.Log("ffmpeg not found in $PATH")
 		return
 	}
+	out := name + ".ogg"
+	removeAfterTest(t, out)
 	err := exec.Command("ffmpeg",
+		"-nostdin", "-y",
 		"-f", "s16le", "-ar", "16000", "-ac", "1",
-		"-i", name, name+".ogg",
+		"-i", name, out,
 	).Run()
 	if err != nil {
 		t.Error(err)
-	} else {
-		os.Remove(name)
 	}
 }
