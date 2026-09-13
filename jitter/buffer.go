@@ -201,7 +201,13 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		}
 	}
 
-	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
+	// A packet is "expired" only if it is behind prevSN *and* close to it. A
+	// packet far behind (outside the withinRange window) is a new sequence space,
+	// e.g. a B2BUA transfer switching sources mid-call, and is handled as a
+	// discontinuity below, the same as a far-ahead packet. Without this, a new
+	// stream starting anywhere in the 32768 numbers behind prevSN was dropped
+	// forever, since drops never advance prevSN.
+	if b.initialized && before(pkt.SequenceNumber, b.prevSN) && withinRange(pkt.SequenceNumber, b.prevSN) {
 		// packet expired
 		if !pkt.Padding {
 			b.stats.PacketsDropped++
