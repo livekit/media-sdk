@@ -110,7 +110,6 @@ func (w *byteEncoder[S]) WriteSample(sample S) error {
 }
 
 func (w *byteEncoder[T]) Close() error {
-	w.buf = nil
 	return w.w.Close()
 }
 
