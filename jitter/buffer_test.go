@@ -290,6 +290,59 @@ func TestFlushReportsLoss(t *testing.T) {
 	})
 }
 
+// A finished stream sending late packets must not stall the active one.
+func TestSSRCSwitch(t *testing.T) {
+	out := make(chan []ExtPacket, 100)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	live := &stream{ssrc: 0x5b4617a5, seq: 20250}
+	stale := &stream{ssrc: 0x4b721f38, seq: 47786}
+
+	for i := 0; i < 10; i++ {
+		b.Push(live.gen(true, true))
+		checkSample(t, out, 1)
+	}
+	for i := 0; i < 5; i++ { // stale stream, far ahead in its own sequence space
+		b.Push(stale.gen(true, true))
+		checkSample(t, out, 1)
+	}
+	for i := 0; i < 10; i++ { // live stream must keep flowing
+		b.Push(live.gen(true, true))
+		checkSample(t, out, 1)
+	}
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed: 25,
+		PacketsPopped: 25,
+		SamplesPopped: 25,
+		SSRCSwitches:  2,
+	})
+}
+
+func TestSSRCSwitchFlushes(t *testing.T) {
+	out := make(chan []ExtPacket, 10)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := &stream{ssrc: 1, seq: 100}
+
+	b.Push(s.gen(true, true))
+	checkSample(t, out, 1)
+	_ = s.gen(true, true) // simulate lost packet (seq gap), next sample waits
+	b.Push(s.gen(true, true))
+	checkSample(t, out, 0)
+
+	// The switch flushes 102 before clearing initialized.
+	b.Push((&stream{ssrc: 2, seq: 50}).gen(true, true))
+	checkSample(t, out, 1)
+	checkSample(t, out, 1)
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed: 3,
+		PacketsLost:   1,
+		PacketsPopped: 3,
+		SamplesPopped: 3,
+		SSRCSwitches:  1,
+	})
+}
+
 func checkSample(t *testing.T, out chan []ExtPacket, expected int) {
 	select {
 	case sample := <-out:
@@ -312,10 +365,12 @@ func checkStats(t *testing.T, b *Buffer, expected *BufferStats) {
 	require.Equal(t, expected.PacketsDropped, stats.PacketsDropped)
 	require.Equal(t, expected.PacketsPopped, stats.PacketsPopped)
 	require.Equal(t, expected.SamplesPopped, stats.SamplesPopped)
+	require.Equal(t, expected.SSRCSwitches, stats.SSRCSwitches)
 }
 
 type stream struct {
-	seq uint16
+	ssrc uint32
+	seq  uint16
 }
 
 func newTestStream() *stream {
@@ -329,6 +384,7 @@ func (s *stream) gen(head, tail bool) *rtp.Packet {
 		Header: rtp.Header{
 			Marker:         tail,
 			SequenceNumber: s.seq,
+			SSRC:           s.ssrc,
 		},
 		Payload: make([]byte, defaultPacketSize),
 	}
