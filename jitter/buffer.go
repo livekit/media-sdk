@@ -43,6 +43,8 @@ type Buffer struct {
 
 	initialized bool
 	prevSN      uint16
+	ssrc        uint32
+	hasSSRC     bool
 	head        *packet
 	tail        *packet
 
@@ -62,6 +64,7 @@ type BufferStats struct {
 	PacketsDropped uint64 // packets dropped (incomplete)
 	PacketsPopped  uint64 // packets sent to handler
 	SamplesPopped  uint64 // samples sent to handler
+	SSRCSwitches   uint64 // times the buffer re-synced onto a new SSRC
 }
 
 type PacketFunc func(packets []ExtPacket)
@@ -175,6 +178,7 @@ func (b *Buffer) Stats() *BufferStats {
 		PacketsDropped: b.stats.PacketsDropped,
 		PacketsPopped:  b.stats.PacketsPopped,
 		SamplesPopped:  b.stats.SamplesPopped,
+		SSRCSwitches:   b.stats.SSRCSwitches,
 	}
 }
 
@@ -191,6 +195,22 @@ func (b *Buffer) Close() {
 	b.closed.Break()
 }
 
+// shouldSwitch reports whether a packet from a new SSRC should take over.
+// Isolated so a stricter policy (hysteresis, quiet-gate) can be added here.
+func (b *Buffer) shouldSwitch(pkt *rtp.Packet) bool {
+	return true
+}
+
+// switchStream re-syncs onto a new SSRC, emitting anything already buffered.
+func (b *Buffer) switchStream(ssrc uint32) {
+	b.flushLocked()
+
+	b.initialized = false
+	b.prevSN = 0
+	b.ssrc = ssrc
+	b.stats.SSRCSwitches++
+}
+
 // push adds a packet to the buffer
 func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	b.stats.PacketsPushed++
@@ -199,6 +219,15 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		if !b.initialized {
 			return
 		}
+	}
+
+	// A new SSRC is an unrelated sequence space. Without this, the expiry check
+	// below would discard it until it caught up to prevSN - up to 32767 packets.
+	switch {
+	case !b.hasSSRC:
+		b.ssrc, b.hasSSRC = pkt.SSRC, true
+	case pkt.SSRC != b.ssrc && b.shouldSwitch(pkt):
+		b.switchStream(pkt.SSRC)
 	}
 
 	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
@@ -348,6 +377,11 @@ func (b *Buffer) Flush() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.flushLocked()
+}
+
+// flushLocked is Flush with b.mu already held.
+func (b *Buffer) flushLocked() {
 	dropped := b.dropIncomplete(time.Time{}, true)
 	loss := false
 
