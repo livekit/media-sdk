@@ -37,6 +37,7 @@ type Buffer struct {
 	logger       logger.Logger
 	onPacket     PacketFunc
 	onPacketLoss PacketLossFunc
+	onStats      StatsFunc
 
 	mu     sync.Mutex
 	closed core.Fuse
@@ -58,16 +59,20 @@ type Buffer struct {
 type Option func(*Buffer)
 
 type BufferStats struct {
-	PacketsPushed  uint64 // total packets pushed
-	PaddingPushed  uint64 // padding packets pushed
-	PacketsLost    uint64 // packets lost
-	PacketsDropped uint64 // packets dropped (incomplete)
-	PacketsPopped  uint64 // packets sent to handler
-	SamplesPopped  uint64 // samples sent to handler
-	SSRCSwitches   uint64 // times the buffer re-synced onto a new SSRC
+	PacketsPushed    uint64 // total packets pushed
+	PaddingPushed    uint64 // padding packets pushed
+	PacketsLost      uint64 // packets lost
+	PacketsDropped   uint64 // packets dropped (incomplete)
+	PacketsPopped    uint64 // packets sent to handler
+	SamplesPopped    uint64 // samples sent to handler
+	SSRCSwitches     uint64 // times the buffer re-synced onto a new SSRC
+	PacketsReordered uint64 // packets that arrived out of order and were put back in sequence
 }
 
 type PacketFunc func(packets []ExtPacket)
+
+// StatsFunc is called when a notable buffer event occurs (a stream switch or a reordered packet)
+type StatsFunc func(stats *BufferStats)
 
 // PacketLossFunc is called when packet loss or drops are detected.
 // packetsLost and packetsDropped represent the number of packets lost and dropped up to the point of the call.
@@ -116,6 +121,12 @@ func WithLogger(logger logger.Logger) Option {
 func WithPacketLossHandler(handler PacketLossFunc) Option {
 	return func(b *Buffer) {
 		b.onPacketLoss = handler
+	}
+}
+
+func WithStatsHandler(handler StatsFunc) Option {
+	return func(b *Buffer) {
+		b.onStats = handler
 	}
 }
 
@@ -171,14 +182,27 @@ func (b *Buffer) Stats() *BufferStats {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	return b.statsLocked()
+}
+
+// notifyStats reports a stats snapshot. Caller must hold b.mu.
+func (b *Buffer) notifyStats() {
+	if b.onStats != nil {
+		b.onStats(b.statsLocked())
+	}
+}
+
+// statsLocked is Stats with b.mu already held.
+func (b *Buffer) statsLocked() *BufferStats {
 	return &BufferStats{
-		PacketsPushed:  b.stats.PacketsPushed,
-		PaddingPushed:  b.stats.PaddingPushed,
-		PacketsLost:    b.stats.PacketsLost,
-		PacketsDropped: b.stats.PacketsDropped,
-		PacketsPopped:  b.stats.PacketsPopped,
-		SamplesPopped:  b.stats.SamplesPopped,
-		SSRCSwitches:   b.stats.SSRCSwitches,
+		PacketsPushed:    b.stats.PacketsPushed,
+		PaddingPushed:    b.stats.PaddingPushed,
+		PacketsLost:      b.stats.PacketsLost,
+		PacketsDropped:   b.stats.PacketsDropped,
+		PacketsPopped:    b.stats.PacketsPopped,
+		SamplesPopped:    b.stats.SamplesPopped,
+		SSRCSwitches:     b.stats.SSRCSwitches,
+		PacketsReordered: b.stats.PacketsReordered,
 	}
 }
 
@@ -209,6 +233,14 @@ func (b *Buffer) switchStream(ssrc uint32) {
 	b.prevSN = 0
 	b.ssrc = ssrc
 	b.stats.SSRCSwitches++
+	b.notifyStats()
+}
+
+// reordered records a packet that arrived out of sequence and is being placed
+// back in order. Caller must hold b.mu.
+func (b *Buffer) reordered() {
+	b.stats.PacketsReordered++
+	b.notifyStats()
 }
 
 // push adds a packet to the buffer
@@ -260,6 +292,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	switch {
 	case beforeHead && withinHeadRange:
 		// prepend
+		b.reordered()
 		p.discont = discont && p.start
 		b.head.prev = p
 		p.next = b.head
@@ -273,6 +306,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 	case withinTailRange:
 		// insert, search from tail
+		b.reordered()
 		for c := b.tail.prev; c != nil; c = c.prev {
 			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
 			if !before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {
@@ -288,6 +322,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 	case withinHeadRange:
 		// insert, search from head
+		b.reordered()
 		for c := b.head.next; c != nil; c = c.next {
 			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
 			if before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {

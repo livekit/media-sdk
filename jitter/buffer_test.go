@@ -110,6 +110,8 @@ func TestJitter(t *testing.T) {
 		PacketsDropped: 0,
 		PacketsPopped:  20,
 		SamplesPopped:  20,
+		// only ooo[0] actually arrived out of sequence; ooo[2] followed ooo[1]
+		PacketsReordered: 1,
 	})
 }
 
@@ -290,6 +292,33 @@ func TestFlushReportsLoss(t *testing.T) {
 	})
 }
 
+// An out-of-order packet put back in sequence must be counted, and reported.
+func TestPacketsReordered(t *testing.T) {
+	out := make(chan []ExtPacket, 10)
+	notified := 0
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out),
+		WithStatsHandler(func(*BufferStats) { notified++ }))
+	defer b.Close()
+	s := &stream{ssrc: 1, seq: 100}
+
+	b.Push(s.gen(true, true)) // 100
+	checkSample(t, out, 1)
+	p101 := s.gen(true, true) // hold 101 back
+	b.Push(s.gen(true, true)) // 102 arrives first, waits
+	checkSample(t, out, 0)
+	b.Push(p101) // 101 arrives late and is put back in sequence
+	checkSample(t, out, 1)
+	checkSample(t, out, 1)
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:    3,
+		PacketsPopped:    3,
+		SamplesPopped:    3,
+		PacketsReordered: 1,
+	})
+	require.Equal(t, 1, notified, "stats handler should report the reorder")
+}
+
 // A finished stream sending late packets must not stall the active one.
 func TestSSRCSwitch(t *testing.T) {
 	out := make(chan []ExtPacket, 100)
@@ -366,6 +395,7 @@ func checkStats(t *testing.T, b *Buffer, expected *BufferStats) {
 	require.Equal(t, expected.PacketsPopped, stats.PacketsPopped)
 	require.Equal(t, expected.SamplesPopped, stats.SamplesPopped)
 	require.Equal(t, expected.SSRCSwitches, stats.SSRCSwitches)
+	require.Equal(t, expected.PacketsReordered, stats.PacketsReordered)
 }
 
 type stream struct {
