@@ -319,6 +319,66 @@ func TestPacketsReordered(t *testing.T) {
 	require.Equal(t, 1, notified, "stats handler should report the reorder")
 }
 
+func TestSequenceRestart(t *testing.T) {
+	delivered := 0
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency,
+		func(pkts []ExtPacket) { delivered += len(pkts) })
+	defer b.Close()
+
+	push := func(seq uint16) {
+		s := &stream{ssrc: 0xc1a417, seq: seq}
+		b.Push(s.gen(true, true))
+	}
+	for i := 0; i <= 349; i++ { // partial first loop
+		push(uint16(i))
+	}
+	for loop := 0; loop < 2; loop++ { // two full loops
+		for i := 0; i <= 801; i++ {
+			push(uint16(i))
+		}
+	}
+	for i := 0; i <= 999; i++ { // final segment, runs past the loop point
+		push(uint16(i))
+	}
+
+	// each restart costs the packets seen before the run is recognised
+	lost := uint64(3 * (sequenceRestartRun - 1))
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:    2954,
+		PacketsDropped:   lost,
+		PacketsPopped:    2954 - lost,
+		SamplesPopped:    2954 - lost,
+		SequenceRestarts: 3,
+	})
+	require.Equal(t, int(2954-lost), delivered)
+}
+
+// A false positive rewinds prevSN into the stale burst and replays the rest.
+func TestSequenceRestartFalsePositive(t *testing.T) {
+	var got []uint16
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func(p []ExtPacket) {
+		for _, x := range p {
+			got = append(got, x.SequenceNumber)
+		}
+	})
+	defer b.Close()
+	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
+
+	for i := 100; i <= 300; i++ { // healthy stream, prevSN = 300
+		push(uint16(i))
+	}
+	n := len(got)
+	for i := 150; i <= 250; i++ { // one long ascending run of late packets
+		push(uint16(i))
+	}
+
+	first := uint16(150 + sequenceRestartRun - 1) // trips the run
+	require.Equal(t, uint64(1), b.Stats().SequenceRestarts)
+	require.Equal(t, uint64(sequenceRestartRun-1), b.Stats().PacketsDropped)
+	require.Equal(t, first, got[n], "first replayed packet")
+	require.Len(t, got[n:], 250-int(first)+1, "rest of the burst is replayed")
+}
+
 // A finished stream sending late packets must not stall the active one.
 func TestSSRCSwitch(t *testing.T) {
 	out := make(chan []ExtPacket, 100)
@@ -396,6 +456,7 @@ func checkStats(t *testing.T, b *Buffer, expected *BufferStats) {
 	require.Equal(t, expected.SamplesPopped, stats.SamplesPopped)
 	require.Equal(t, expected.SSRCSwitches, stats.SSRCSwitches)
 	require.Equal(t, expected.PacketsReordered, stats.PacketsReordered)
+	require.Equal(t, expected.SequenceRestarts, stats.SequenceRestarts)
 }
 
 type stream struct {
