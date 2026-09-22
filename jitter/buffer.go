@@ -145,7 +145,7 @@ func (b *Buffer) UpdateLatency(latency time.Duration) {
 
 	b.latency = latency
 	if b.head != nil {
-		b.timer.Reset(time.Until(b.head.extPacket.ReceivedAt.Add(latency)))
+		b.timer.Reset(b.head.extPacket.ReceivedAt.Add(latency).Sub(mono.Now()))
 	}
 }
 
@@ -220,6 +220,8 @@ func (s *BufferStats) PacketLoss() float64 {
 }
 
 func (b *Buffer) Close() {
+	b.Flush()
+
 	b.timer.Stop()
 	b.closed.Break()
 }
@@ -388,7 +390,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 // popReady pushes all ready samples to the out channel
 func (b *Buffer) popReady() {
-	expiry := time.Now().Add(-b.latency)
+	expiry := mono.Now().Add(-b.latency)
 
 	b.dropIncompleteExpired(expiry)
 
@@ -401,7 +403,7 @@ func (b *Buffer) popReady() {
 		} else if !expiry.Before(b.head.extPacket.ReceivedAt) {
 			// max latency reached
 			loss = true
-			b.stats.PacketsLost += uint64(b.head.extPacket.SequenceNumber - b.prevSN - 1)
+			b.stats.PacketsLost += missingBetween(b.head.extPacket.SequenceNumber, b.prevSN)
 		} else {
 			break
 		}
@@ -416,7 +418,7 @@ func (b *Buffer) popReady() {
 	}
 
 	if b.head != nil {
-		b.timer.Reset(time.Until(b.head.extPacket.ReceivedAt.Add(b.latency)))
+		b.timer.Reset(b.head.extPacket.ReceivedAt.Add(b.latency).Sub(mono.Now()))
 	}
 }
 
@@ -436,7 +438,7 @@ func (b *Buffer) dropIncomplete(expiry time.Time, force bool) bool {
 
 	for b.head != nil && !b.head.isComplete() && (force || b.head.extPacket.ReceivedAt.Before(expiry)) {
 		if b.initialized && !b.head.discont {
-			b.stats.PacketsLost += uint64(b.head.extPacket.SequenceNumber - b.prevSN - 1)
+			b.stats.PacketsLost += missingBetween(b.head.extPacket.SequenceNumber, b.prevSN)
 		}
 
 		b.free(b.popHead())
@@ -468,7 +470,7 @@ func (b *Buffer) flushLocked() {
 		} else {
 			// missing packets between prevSN and current head
 			loss = true
-			b.stats.PacketsLost += uint64(b.head.extPacket.SequenceNumber - b.prevSN - 1)
+			b.stats.PacketsLost += missingBetween(b.head.extPacket.SequenceNumber, b.prevSN)
 		}
 
 		if sample := b.popSample(); len(sample) > 0 {
@@ -523,6 +525,14 @@ func (b *Buffer) popHead() *packet {
 // ~400ms while old packets arrive in order, since any accepted packet zeroes the
 // run.
 const sequenceRestartRun = 20
+
+// missingBetween returns how many packets are missing between prevSN and sn.
+// sn must be ahead of prevSN; equal or behind wraps the subtraction to ~65535.
+// push drops anything at or behind prevSN, and callers skip this while
+// !initialized, so neither case reaches here.
+func missingBetween(sn, prevSN uint16) uint64 {
+	return uint64(sn - prevSN - 1)
+}
 
 func before(a, b uint16) bool {
 	return (b-a)&0x8000 == 0

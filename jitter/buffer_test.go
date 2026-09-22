@@ -432,6 +432,22 @@ func TestSSRCSwitchFlushes(t *testing.T) {
 	})
 }
 
+// Close must emit what is still buffered, not discard it.
+func TestCloseFlushes(t *testing.T) {
+	out := make(chan []ExtPacket, 10)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := &stream{ssrc: 1, seq: 100}
+
+	b.Push(s.gen(true, true))
+	checkSample(t, out, 1)
+	_ = s.gen(true, true) // lost packet, so the next one has to wait
+	b.Push(s.gen(true, true))
+	checkSample(t, out, 0)
+
+	b.Close()
+	checkSample(t, out, 1)
+}
+
 func checkSample(t *testing.T, out chan []ExtPacket, expected int) {
 	select {
 	case sample := <-out:
