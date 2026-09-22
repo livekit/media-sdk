@@ -38,6 +38,7 @@ func (b *Buffer) newPacket(pkt *rtp.Packet, receivedAt time.Time) *packet {
 
 	p.prev = nil
 	p.next = nil
+	p.discont = false
 	p.start = b.depacketizer.IsPartitionHead(pkt.Payload)
 	p.end = b.depacketizer.IsPartitionTail(pkt.Marker, pkt.Payload)
 	p.extPacket = ExtPacket{receivedAt, pkt}
