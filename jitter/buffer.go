@@ -46,8 +46,11 @@ type Buffer struct {
 	prevSN      uint16
 	ssrc        uint32
 	hasSSRC     bool
-	head        *packet
-	tail        *packet
+
+	restartRun    int    // consecutive expired packets, ascending
+	restartPrevSN uint16 // sequence number of the last expired packet
+	head          *packet
+	tail          *packet
 
 	stats *BufferStats
 	timer *time.Timer
@@ -66,7 +69,8 @@ type BufferStats struct {
 	PacketsPopped    uint64 // packets sent to handler
 	SamplesPopped    uint64 // samples sent to handler
 	SSRCSwitches     uint64 // times the buffer re-synced onto a new SSRC
-	PacketsReordered uint64 // packets that arrived out of order and were put back in sequence
+	PacketsReordered uint64 // packets put back in sequence
+	SequenceRestarts uint64 // sender restarted its sequence, same SSRC
 }
 
 type PacketFunc func(packets []ExtPacket)
@@ -203,6 +207,7 @@ func (b *Buffer) statsLocked() *BufferStats {
 		SamplesPopped:    b.stats.SamplesPopped,
 		SSRCSwitches:     b.stats.SSRCSwitches,
 		PacketsReordered: b.stats.PacketsReordered,
+		SequenceRestarts: b.stats.SequenceRestarts,
 	}
 }
 
@@ -227,13 +232,30 @@ func (b *Buffer) shouldSwitch(pkt *rtp.Packet) bool {
 
 // switchStream re-syncs onto a new SSRC, emitting anything already buffered.
 func (b *Buffer) switchStream(ssrc uint32) {
+	b.resetStream()
+
+	b.ssrc = ssrc
+	b.stats.SSRCSwitches++
+	b.notifyStats()
+}
+
+// restartStream re-syncs after a sequence restart on the same SSRC.
+func (b *Buffer) restartStream() {
+	b.resetStream()
+
+	b.stats.SequenceRestarts++
+	b.notifyStats()
+}
+
+// resetStream emits what is buffered and clears sequence tracking.
+// Caller must hold b.mu.
+func (b *Buffer) resetStream() {
 	b.flushLocked()
 
 	b.initialized = false
 	b.prevSN = 0
-	b.ssrc = ssrc
-	b.stats.SSRCSwitches++
-	b.notifyStats()
+	b.restartRun = 0
+	b.restartPrevSN = 0
 }
 
 // reordered records a packet that arrived out of sequence and is being placed
@@ -241,6 +263,21 @@ func (b *Buffer) switchStream(ssrc uint32) {
 func (b *Buffer) reordered() {
 	b.stats.PacketsReordered++
 	b.notifyStats()
+}
+
+// sequenceRestart reports whether the expired packets so far look like a sender
+// restarting its sequence numbering. A restart keeps counting up with nothing
+// accepted in between; late packets stop expiring once they pass prevSN.
+// Caller must hold b.mu.
+func (b *Buffer) sequenceRestart(sn uint16) bool {
+	if b.restartRun > 0 && !before(sn, b.restartPrevSN) && withinRange(sn, b.restartPrevSN) {
+		b.restartRun++
+	} else {
+		b.restartRun = 1
+	}
+	b.restartPrevSN = sn
+
+	return b.restartRun >= sequenceRestartRun
 }
 
 // push adds a packet to the buffer
@@ -263,15 +300,20 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	}
 
 	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
-		// packet expired
-		if !pkt.Padding {
-			b.stats.PacketsDropped++
-			if b.onPacketLoss != nil {
-				b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+		if !b.sequenceRestart(pkt.SequenceNumber) {
+			// packet expired
+			if !pkt.Padding {
+				b.stats.PacketsDropped++
+				if b.onPacketLoss != nil {
+					b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+				}
 			}
+			return
 		}
-		return
+		b.restartStream()
 	}
+	// an accepted packet ends any run of expired ones
+	b.restartRun = 0
 
 	p := b.newPacket(pkt, receivedAt)
 
@@ -475,6 +517,12 @@ func (b *Buffer) popHead() *packet {
 	}
 	return c
 }
+
+// sequenceRestartRun is how many consecutive ascending expired packets are read
+// as a sequence restart. A run this long needs the live stream to go silent for
+// ~400ms while old packets arrive in order, since any accepted packet zeroes the
+// run.
+const sequenceRestartRun = 20
 
 func before(a, b uint16) bool {
 	return (b-a)&0x8000 == 0
