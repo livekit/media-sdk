@@ -87,6 +87,7 @@ func (s *session) AcceptStream() (ReadStream, uint32, error) {
 			return nil, 0, err
 		}
 		if n > MTUSize {
+			// s.log.Errorw("RTP packet is larger than MTU limit", nil)
 			continue // ignore partial messages
 		}
 		var p rtp.Packet
