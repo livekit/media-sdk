@@ -74,9 +74,13 @@ func (s *session) OpenWriteStream() (WriteStream, error) {
 }
 
 func (s *session) AcceptStream() (ReadStream, uint32, error) {
-	// Watch outside s.rmu. Close breaks the fuse and then takes s.rmu.
-	closed := s.closed.Watch()
+	closed := s.closed.Watch() // Must be done outside s.rmu, s.closed.Once uses it
 
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	if s.bySSRC == nil {
+		return nil, 0, io.EOF
+	}
 	overflow := false
 	for {
 		n, err := s.conn.Read(s.rbuf[:])
@@ -95,11 +99,6 @@ func (s *session) AcceptStream() (ReadStream, uint32, error) {
 			continue // ignore
 		}
 
-		s.rmu.Lock()
-		if s.bySSRC == nil {
-			s.rmu.Unlock()
-			return nil, 0, io.EOF
-		}
 		r := s.bySSRC[p.SSRC]
 		isNew := r == nil
 		if isNew {
@@ -111,8 +110,7 @@ func (s *session) AcceptStream() (ReadStream, uint32, error) {
 			}
 			s.bySSRC[p.SSRC] = r
 		}
-		s.rmu.Unlock()
-		r.write(&p) // run without s.rmu
+		r.write(&p)
 		if isNew {
 			return r, r.ssrc, nil
 		}
@@ -183,7 +181,7 @@ func (r *readStream) write(p *rtp.Packet) {
 		}
 		return
 	}
-	// No reader waiting, clone source data to queue
+	// No reader waiting, queue intermediate copy. Reader copies again to buffers
 	p.Payload = slices.Clone(p.Payload)
 	select {
 	case r.recv <- p:
