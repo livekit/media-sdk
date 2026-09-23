@@ -200,8 +200,7 @@ func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 
 	var copyNotify chan int
 	if r.hdr == nil {
-		// We are the first reader goroutine to wait for a packet.
-		// Offer destination buffers to skip an intermediate copy.
+		// No active readers have offered direct one-copy path.
 		r.hdr = h
 		r.payload = payload
 		copyNotify = r.copied
@@ -215,14 +214,23 @@ func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 	}
 	r.mu.Unlock()
 
+	// There is a race here today:
+	// 1. Goroutine A is offering its buffers, blocks on copyNotify
+	// 2. Writer receive packet, copies to Goroutine A buffers, zeros offer, releases lock
+	// 3. Goroutine B sees empty offer, offers its own buffers, blocks on copyNotify
+	// 4. Writer sends r.copied signal.
+	// This may wake Goroutine B via shared copyNotify with empty buffers, may stall Goroutine A
+
 	select {
 	case p := <-r.recv:
+		// Need to copy from queue to destination buffers
 		*h = p.Header
 		n := copy(payload, p.Payload)
 		return n, nil
 	case <-r.closed:
 		return 0, io.EOF
 	case n := <-copyNotify:
+		// Directly copied to destination buffers
 		return n, nil
 	case p := <-r.recv:
 		*h = p.Header
