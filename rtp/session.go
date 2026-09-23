@@ -232,9 +232,5 @@ func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 	case n := <-copyNotify:
 		// Directly copied to destination buffers
 		return n, nil
-	case p := <-r.recv:
-		*h = p.Header
-		n := copy(payload, p.Payload)
-		return n, nil
 	}
 }
