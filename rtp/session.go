@@ -74,34 +74,30 @@ func (s *session) OpenWriteStream() (WriteStream, error) {
 }
 
 func (s *session) AcceptStream() (ReadStream, uint32, error) {
-	// This must be called outside the s.rmu, otherwise it may deadlock with s.closed.Once in Close.
-	closed := s.closed.Watch()
+	closed := s.closed.Watch() // Must be done outside s.rmu, s.closed.Once uses it
 
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
-	overflow := false
+	if s.bySSRC == nil {
+		return nil, 0, io.EOF
+	}
 	for {
 		n, err := s.conn.Read(s.rbuf[:])
 		if err != nil {
 			return nil, 0, err
 		}
 		if n > MTUSize {
-			overflow = true
-			if !overflow {
-				s.log.Errorw("RTP packet is larger than MTU limit", nil)
-			}
+			// s.log.Errorw("RTP packet is larger than MTU limit", nil)
 			continue // ignore partial messages
 		}
-		buf := s.rbuf[:n]
 		var p rtp.Packet
-		err = p.Unmarshal(buf)
-		if err != nil {
+		if err = p.Unmarshal(s.rbuf[:n]); err != nil {
 			continue // ignore
 		}
 
-		isNew := false
 		r := s.bySSRC[p.SSRC]
-		if r == nil {
+		isNew := r == nil
+		if isNew {
 			r = &readStream{
 				ssrc:   p.SSRC,
 				closed: closed,
@@ -109,7 +105,6 @@ func (s *session) AcceptStream() (ReadStream, uint32, error) {
 				recv:   make(chan *rtp.Packet, 10),
 			}
 			s.bySSRC[p.SSRC] = r
-			isNew = true
 		}
 		r.write(&p)
 		if isNew {
@@ -170,7 +165,7 @@ func (r *readStream) write(p *rtp.Packet) {
 	r.mu.Lock()
 
 	if r.hdr != nil {
-		// zero copy
+		// one-copy hop when reader is pending. Copy directly to reader's buffers
 		*r.hdr = p.Header
 		n := copy(r.payload, p.Payload)
 		r.hdr, r.payload = nil, nil
@@ -182,6 +177,7 @@ func (r *readStream) write(p *rtp.Packet) {
 		}
 		return
 	}
+	// No reader waiting, queue intermediate copy. Reader copies again to buffers
 	p.Payload = slices.Clone(p.Payload)
 	select {
 	case r.recv <- p:
@@ -191,7 +187,6 @@ func (r *readStream) write(p *rtp.Packet) {
 }
 
 func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
-	direct := false
 	r.mu.Lock()
 
 	// Check the queue before offering our buffer.
@@ -204,38 +199,39 @@ func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 	default:
 	}
 
+	var copyNotify chan int
 	if r.hdr == nil {
+		// No active readers have offered direct one-copy path.
 		r.hdr = h
 		r.payload = payload
-		direct = true
+		copyNotify = r.copied
+		defer func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.hdr == h {
+				r.hdr, r.payload = nil, nil
+			}
+		}()
 	}
 	r.mu.Unlock()
 
-	// If we didn't successfully make an offer, read from the queue.
-	if !direct {
-		select {
-		case p := <-r.recv:
-			*h = p.Header
-			n := copy(payload, p.Payload)
-			return n, nil
-		case <-r.closed:
-		}
-		return 0, io.EOF
-	}
+	// There is a race here today:
+	// 1. Goroutine A is offering its buffers, blocks on copyNotify
+	// 2. Writer receive packet, copies to Goroutine A buffers, zeros offer, releases lock
+	// 3. Goroutine B sees empty offer, offers its own buffers, blocks on copyNotify
+	// 4. Writer sends r.copied signal.
+	// This may wake Goroutine B via shared copyNotify with empty buffers, may stall Goroutine A
 
-	defer func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if r.hdr == h {
-			r.hdr, r.payload = nil, nil
-		}
-	}()
-
-	// If we were able to offer our buffer, wait for the copy signal.
 	select {
-	case n := <-r.copied:
+	case p := <-r.recv:
+		// Need to copy from queue to destination buffers
+		*h = p.Header
+		n := copy(payload, p.Payload)
 		return n, nil
 	case <-r.closed:
+		return 0, io.EOF
+	case n := <-copyNotify:
+		// Directly copied to destination buffers
+		return n, nil
 	}
-	return 0, io.EOF
 }
