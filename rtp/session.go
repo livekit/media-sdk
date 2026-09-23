@@ -74,11 +74,9 @@ func (s *session) OpenWriteStream() (WriteStream, error) {
 }
 
 func (s *session) AcceptStream() (ReadStream, uint32, error) {
-	// This must be called outside the s.rmu, otherwise it may deadlock with s.closed.Once in Close.
+	// Watch outside s.rmu. Close breaks the fuse and then takes s.rmu.
 	closed := s.closed.Watch()
 
-	s.rmu.Lock()
-	defer s.rmu.Unlock()
 	overflow := false
 	for {
 		n, err := s.conn.Read(s.rbuf[:])
@@ -92,16 +90,19 @@ func (s *session) AcceptStream() (ReadStream, uint32, error) {
 			}
 			continue // ignore partial messages
 		}
-		buf := s.rbuf[:n]
 		var p rtp.Packet
-		err = p.Unmarshal(buf)
-		if err != nil {
+		if err = p.Unmarshal(s.rbuf[:n]); err != nil {
 			continue // ignore
 		}
 
-		isNew := false
+		s.rmu.Lock()
+		if s.bySSRC == nil {
+			s.rmu.Unlock()
+			return nil, 0, io.EOF
+		}
 		r := s.bySSRC[p.SSRC]
-		if r == nil {
+		isNew := r == nil
+		if isNew {
 			r = &readStream{
 				ssrc:   p.SSRC,
 				closed: closed,
@@ -109,9 +110,9 @@ func (s *session) AcceptStream() (ReadStream, uint32, error) {
 				recv:   make(chan *rtp.Packet, 10),
 			}
 			s.bySSRC[p.SSRC] = r
-			isNew = true
 		}
-		r.write(&p)
+		s.rmu.Unlock()
+		r.write(&p) // run without s.rmu
 		if isNew {
 			return r, r.ssrc, nil
 		}
@@ -170,7 +171,7 @@ func (r *readStream) write(p *rtp.Packet) {
 	r.mu.Lock()
 
 	if r.hdr != nil {
-		// zero copy
+		// one-copy hop when reader is pending. Copy directly to reader's buffers
 		*r.hdr = p.Header
 		n := copy(r.payload, p.Payload)
 		r.hdr, r.payload = nil, nil
@@ -182,6 +183,7 @@ func (r *readStream) write(p *rtp.Packet) {
 		}
 		return
 	}
+	// No reader waiting, clone source data to queue
 	p.Payload = slices.Clone(p.Payload)
 	select {
 	case r.recv <- p:
@@ -191,7 +193,6 @@ func (r *readStream) write(p *rtp.Packet) {
 }
 
 func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
-	direct := false
 	r.mu.Lock()
 
 	// Check the queue before offering our buffer.
@@ -204,38 +205,35 @@ func (r *readStream) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 	default:
 	}
 
+	var copyNotify chan int
 	if r.hdr == nil {
+		// We are the first reader goroutine to wait for a packet.
+		// Offer destination buffers to skip an intermediate copy.
 		r.hdr = h
 		r.payload = payload
-		direct = true
+		copyNotify = r.copied
+		defer func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.hdr == h {
+				r.hdr, r.payload = nil, nil
+			}
+		}()
 	}
 	r.mu.Unlock()
 
-	// If we didn't successfully make an offer, read from the queue.
-	if !direct {
-		select {
-		case p := <-r.recv:
-			*h = p.Header
-			n := copy(payload, p.Payload)
-			return n, nil
-		case <-r.closed:
-		}
-		return 0, io.EOF
-	}
-
-	defer func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if r.hdr == h {
-			r.hdr, r.payload = nil, nil
-		}
-	}()
-
-	// If we were able to offer our buffer, wait for the copy signal.
 	select {
-	case n := <-r.copied:
+	case p := <-r.recv:
+		*h = p.Header
+		n := copy(payload, p.Payload)
 		return n, nil
 	case <-r.closed:
+		return 0, io.EOF
+	case n := <-copyNotify:
+		return n, nil
+	case p := <-r.recv:
+		*h = p.Header
+		n := copy(payload, p.Payload)
+		return n, nil
 	}
-	return 0, io.EOF
 }
