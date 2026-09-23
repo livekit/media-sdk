@@ -81,17 +81,12 @@ func (s *session) AcceptStream() (ReadStream, uint32, error) {
 	if s.bySSRC == nil {
 		return nil, 0, io.EOF
 	}
-	overflow := false
 	for {
 		n, err := s.conn.Read(s.rbuf[:])
 		if err != nil {
 			return nil, 0, err
 		}
 		if n > MTUSize {
-			overflow = true
-			if !overflow {
-				s.log.Errorw("RTP packet is larger than MTU limit", nil)
-			}
 			continue // ignore partial messages
 		}
 		var p rtp.Packet
