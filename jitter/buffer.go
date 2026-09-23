@@ -49,6 +49,7 @@ type Buffer struct {
 
 	restartRun    int    // consecutive expired packets, ascending
 	restartPrevSN uint16 // sequence number of the last expired packet
+	restartFar    bool   // the run started beyond the reorder window
 	head          *packet
 	tail          *packet
 
@@ -258,6 +259,7 @@ func (b *Buffer) resetStream() {
 	b.prevSN = 0
 	b.restartRun = 0
 	b.restartPrevSN = 0
+	b.restartFar = false
 }
 
 // reordered records a packet that arrived out of sequence and is being placed
@@ -270,15 +272,21 @@ func (b *Buffer) reordered() {
 // sequenceRestart reports whether the expired packets so far look like a sender
 // restarting its sequence numbering. A restart keeps counting up with nothing
 // accepted in between; late packets stop expiring once they pass prevSN.
+// A run that starts beyond the reorder window cannot be late packets, so it
+// needs only farSequenceRestartRun.
 // Caller must hold b.mu.
 func (b *Buffer) sequenceRestart(sn uint16) bool {
 	if b.restartRun > 0 && !before(sn, b.restartPrevSN) && withinRange(sn, b.restartPrevSN) {
 		b.restartRun++
 	} else {
 		b.restartRun = 1
+		b.restartFar = !withinRange(sn, b.prevSN)
 	}
 	b.restartPrevSN = sn
 
+	if b.restartFar {
+		return b.restartRun >= farSequenceRestartRun
+	}
 	return b.restartRun >= sequenceRestartRun
 }
 
@@ -525,6 +533,11 @@ func (b *Buffer) popHead() *packet {
 // ~400ms while old packets arrive in order, since any accepted packet zeroes the
 // run.
 const sequenceRestartRun = 20
+
+// farSequenceRestartRun is the run needed when it starts beyond the reorder
+// window of prevSN. A packet that far behind is not late, but a lone stale one
+// should not rewind the stream, so it still takes a second packet to confirm.
+const farSequenceRestartRun = 2
 
 // missingBetween returns how many packets are missing between prevSN and sn.
 // sn must be ahead of prevSN; equal or behind wraps the subtraction to ~65535.
