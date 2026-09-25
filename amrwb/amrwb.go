@@ -78,7 +78,9 @@ func init() {
 		// Pick the best mode the peer can support.
 		// TODO: we should probably change the priority of the codec based on this as well
 		maxMode := -1
+		var offeredModeSet string
 		if v, ok := c.Params.Get(paramModeSet); ok {
+			offeredModeSet = v
 			for s := range strings.SplitSeq(v, ",") {
 				if s == "" {
 					continue
@@ -92,8 +94,12 @@ func init() {
 		}
 		if maxMode >= 0 {
 			mode = amrwb.Mode(maxMode)
+			// RFC 4867 8.3.1 requires an offered mode-set to be returned
+			// unmodified, even when the encoder chooses one mode within it.
+			accepted.Add(paramModeSet, offeredModeSet)
+		} else {
+			accepted.Add(paramModeSet, strconv.Itoa(int(mode)))
 		}
-		accepted.Add(paramModeSet, strconv.Itoa(int(mode)))
 
 		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
 		info.Params = accepted
