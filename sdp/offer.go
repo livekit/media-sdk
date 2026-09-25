@@ -760,10 +760,14 @@ func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, err
 			}
 			c := getCodec(typ)
 			for _, par := range strings.Split(sub[1], ";") {
+				par = strings.TrimSpace(par)
+				if par == "" {
+					continue
+				}
 				p := media.CodecParam{Key: par}
 				if i := strings.IndexByte(par, '='); i >= 0 {
-					p.Key = par[:i]
-					p.Val = par[i+1:]
+					p.Key = strings.TrimSpace(par[:i])
+					p.Val = strings.TrimSpace(par[i+1:])
 				}
 				c.Config.Params = append(c.Config.Params, p)
 			}
