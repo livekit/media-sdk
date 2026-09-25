@@ -47,11 +47,12 @@ type Buffer struct {
 	ssrc        uint32
 	hasSSRC     bool
 
-	restartRun    int    // consecutive expired packets, ascending
-	restartPrevSN uint16 // sequence number of the last expired packet
-	restartFar    bool   // the run started beyond the reorder window
-	head          *packet
-	tail          *packet
+	detectRestarts bool   // see WithSequenceRestartDetection
+	restartRun     int    // consecutive expired packets, ascending
+	restartPrevSN  uint16 // sequence number of the last expired packet
+	restartFar     bool   // the run started beyond the reorder window
+	head           *packet
+	tail           *packet
 
 	stats *BufferStats
 	timer *time.Timer
@@ -132,6 +133,20 @@ func WithPacketLossHandler(handler PacketLossFunc) Option {
 func WithStatsHandler(handler StatsFunc) Option {
 	return func(b *Buffer) {
 		b.onStats = handler
+	}
+}
+
+// WithSequenceRestartDetection re-syncs when the sender restarts its sequence
+// numbering on the same SSRC, instead of discarding the new sequence until it
+// catches up to prevSN.
+//
+// Detection counts packets, so it is only safe at audio packet rates. On video,
+// a late burst of retransmits (e.g. NACKs for a lost keyframe) can arrive
+// back-to-back with no live packet in between and be mistaken for a restart,
+// which drops the frame being assembled and stalls output for one latency.
+func WithSequenceRestartDetection() Option {
+	return func(b *Buffer) {
+		b.detectRestarts = true
 	}
 }
 
@@ -310,7 +325,7 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	}
 
 	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
-		if !b.sequenceRestart(pkt.SequenceNumber) {
+		if !b.detectRestarts || !b.sequenceRestart(pkt.SequenceNumber) {
 			// packet expired
 			if !pkt.Padding {
 				b.stats.PacketsDropped++
@@ -529,14 +544,15 @@ func (b *Buffer) popHead() *packet {
 }
 
 // sequenceRestartRun is how many consecutive ascending expired packets are read
-// as a sequence restart. A run this long needs the live stream to go silent for
-// ~400ms while old packets arrive in order, since any accepted packet zeroes the
-// run.
+// as a sequence restart. At 20ms audio packets, a run this long needs the live
+// stream to go silent for ~400ms while old packets arrive in order, since any
+// accepted packet zeroes the run. At video rates it does not, hence opt-in.
 const sequenceRestartRun = 20
 
 // farSequenceRestartRun is the run needed when it starts beyond the reorder
-// window of prevSN. A packet that far behind is not late, but a lone stale one
-// should not rewind the stream, so it still takes a second packet to confirm.
+// window of prevSN. At audio rates a packet that far behind (~60s) is not late,
+// but a lone stale one should not rewind the stream, so it still takes a second
+// packet to confirm.
 const farSequenceRestartRun = 2
 
 // missingBetween returns how many packets are missing between prevSN and sn.
