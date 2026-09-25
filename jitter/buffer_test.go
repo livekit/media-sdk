@@ -322,7 +322,7 @@ func TestPacketsReordered(t *testing.T) {
 func TestSequenceRestart(t *testing.T) {
 	delivered := 0
 	b := NewBuffer(&testDepacketizer{}, testBufferLatency,
-		func(pkts []ExtPacket) { delivered += len(pkts) })
+		func(pkts []ExtPacket) { delivered += len(pkts) }, WithSequenceRestartDetection())
 	defer b.Close()
 
 	push := func(seq uint16) {
@@ -360,7 +360,7 @@ func TestSequenceRestartFalsePositive(t *testing.T) {
 		for _, x := range p {
 			got = append(got, x.SequenceNumber)
 		}
-	})
+	}, WithSequenceRestartDetection())
 	defer b.Close()
 	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
 
@@ -388,7 +388,7 @@ func TestSequenceRestartFar(t *testing.T) {
 		for _, x := range p {
 			got = append(got, x.SequenceNumber)
 		}
-	})
+	}, WithSequenceRestartDetection())
 	defer b.Close()
 	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
 
@@ -412,7 +412,7 @@ func TestSequenceRestartFar(t *testing.T) {
 
 // A lone stale packet from beyond the window must not rewind the stream.
 func TestSequenceRestartFarStray(t *testing.T) {
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func([]ExtPacket) {})
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func([]ExtPacket) {}, WithSequenceRestartDetection())
 	defer b.Close()
 	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
 
@@ -429,6 +429,31 @@ func TestSequenceRestartFarStray(t *testing.T) {
 		PacketsDropped: 1,
 		PacketsPopped:  100,
 		SamplesPopped:  100,
+	})
+}
+
+// Restart detection is opt-in: by default a restart is discarded as expired
+// until the new sequence catches up, near or far behind.
+func TestSequenceRestartDisabled(t *testing.T) {
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func([]ExtPacket) {})
+	defer b.Close()
+	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
+
+	for i := 21245; i <= 21294; i++ {
+		push(uint16(i))
+	}
+	for i := 21000; i < 21000+sequenceRestartRun; i++ { // near run
+		push(uint16(i))
+	}
+	for i := 12676; i < 12676+farSequenceRestartRun; i++ { // far run
+		push(uint16(i))
+	}
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:  50 + sequenceRestartRun + farSequenceRestartRun,
+		PacketsDropped: sequenceRestartRun + farSequenceRestartRun,
+		PacketsPopped:  50,
+		SamplesPopped:  50,
 	})
 }
 
