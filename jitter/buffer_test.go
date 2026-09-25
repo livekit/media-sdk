@@ -379,6 +379,59 @@ func TestSequenceRestartFalsePositive(t *testing.T) {
 	require.Len(t, got[n:], 250-int(first)+1, "rest of the burst is replayed")
 }
 
+// A transfer can re-anchor the same SSRC far behind prevSN, beyond the reorder
+// window. That cannot be a late packet, so it resyncs after a short run instead
+// of the full sequenceRestartRun. Captured call: 21294 -> 12676.
+func TestSequenceRestartFar(t *testing.T) {
+	var got []uint16
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func(p []ExtPacket) {
+		for _, x := range p {
+			got = append(got, x.SequenceNumber)
+		}
+	})
+	defer b.Close()
+	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
+
+	for i := 21245; i <= 21294; i++ {
+		push(uint16(i))
+	}
+	for i := 12676; i < 12676+50; i++ {
+		push(uint16(i))
+	}
+
+	lost := uint64(farSequenceRestartRun - 1)
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:    100,
+		PacketsDropped:   lost,
+		PacketsPopped:    100 - lost,
+		SamplesPopped:    100 - lost,
+		SequenceRestarts: 1,
+	})
+	require.Equal(t, uint16(12676+lost), got[50], "new stream resumes after the short run")
+}
+
+// A lone stale packet from beyond the window must not rewind the stream.
+func TestSequenceRestartFarStray(t *testing.T) {
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func([]ExtPacket) {})
+	defer b.Close()
+	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
+
+	for i := 21245; i <= 21294; i++ {
+		push(uint16(i))
+	}
+	push(12676)
+	for i := 21295; i < 21295+50; i++ {
+		push(uint16(i))
+	}
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:  101,
+		PacketsDropped: 1,
+		PacketsPopped:  100,
+		SamplesPopped:  100,
+	})
+}
+
 // A finished stream sending late packets must not stall the active one.
 func TestSSRCSwitch(t *testing.T) {
 	out := make(chan []ExtPacket, 100)
