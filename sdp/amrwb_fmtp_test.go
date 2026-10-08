@@ -110,3 +110,46 @@ func TestAMRWBAnswerOctetAligned(t *testing.T) {
 	frameType := int(packet[1]>>3) & 0xf
 	require.Equal(t, 2, frameType, "encoded frame type must be within the offered mode-set, got packet %x", packet)
 }
+
+func TestAMRWBRejectUnimplementedParams(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		fmtp    string
+		accepts bool
+	}{
+		// Not implemented: offers enabling these must be rejected entirely
+		// instead of answered with a mismatched configuration.
+		{"crc", "octet-align=0;crc=1", false},
+		{"robust-sorting", "octet-align=0;robust-sorting=1", false},
+		{"interleaving", "octet-align=0;interleaving=3", false},
+		// Disabled values are the defaults and must be accepted.
+		{"crc-off", "octet-align=0;crc=0", true},
+		{"robust-sorting-off", "octet-align=0;robust-sorting=0", true},
+		{"interleaving-off", "octet-align=0;interleaving=0", true},
+		{"none", "", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			codecs := media.NewCodecSet()
+			codecs.SetEnabled(amrwb.SDPNameOnly, true)
+			lines := []string{
+				"v=0", "o=- 1 1 IN IP4 192.0.2.1", "s=-", "c=IN IP4 192.0.2.1", "t=0 0",
+				"m=audio 5004 RTP/AVP 102", "a=rtpmap:102 AMR-WB/16000",
+			}
+			if c.fmtp != "" {
+				lines = append(lines, "a=fmtp:102 "+c.fmtp)
+			}
+			lines = append(lines, "a=ptime:20", "a=sendrecv", "")
+			offer, err := ParseOfferWith(codecs, []byte(strings.Join(lines, "\r\n")))
+			require.NoError(t, err)
+			answer, _, err := offer.Answer(netip.MustParseAddr("192.0.2.2"), 5006, EncryptionNone)
+			if !c.accepts {
+				require.Equal(t, ErrNoCommonMedia, err)
+				return
+			}
+			require.NoError(t, err)
+			answerData, err := answer.SDP.Marshal()
+			require.NoError(t, err)
+			require.Contains(t, string(answerData), "a=rtpmap:102 AMR-WB/16000\r\n")
+		})
+	}
+}
