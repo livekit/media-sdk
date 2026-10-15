@@ -193,10 +193,8 @@ func TestDTMFDelay(t *testing.T) {
 					seq++
 				}
 				ts += packetDur
-				// delay between digits
-				ts += uint32(eventDur / (time.Second / time.Duration(eventsRate)))
-				// rounding error (12.5 events in a sec)
-				ts -= packetDur / 2
+				// delay between digits, same number of frames as the tone
+				ts += n * packetDur
 			}
 			expectDigit(1, '1')
 			ts += uint32(eventsRate) / 2 // 500ms delay

@@ -95,6 +95,7 @@ const (
 	toneVolume  = math.MaxInt16 / 2
 
 	// eventDur is a duration of a DTMF tone. Tone is followed by a delay with the same duration.
+	// Both are rounded up to whole frames when sent (260ms with 20ms frames).
 	eventDur = 250 * time.Millisecond
 
 	// delayDur is a delay per each 'w' character in DTMF.
@@ -264,6 +265,11 @@ func Encode(out []byte, ev Event) (int, error) {
 	return 4, nil
 }
 
+// roundTo rounds dt up to a multiple of step.
+func roundTo(dt, step time.Duration) time.Duration {
+	return (dt + step - 1) / step * step
+}
+
 // Write in-band (analog) and off-band (digital) DTMF tones to audio and RTP streams respectively.
 //
 // Digits may contain a special character 'w' which adds a 0.5 sec delay.
@@ -290,6 +296,10 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 		remaining time.Duration
 	)
 	setDelay := func(dt time.Duration) {
+		// Tones and delays are sent as whole frames. Round durations up front,
+		// so that RTP timestamps advance exactly as much as the frames we send.
+		// Otherwise, each digit drifts behind the audio stream that shares the RTP timeline.
+		dt = roundTo(dt, step)
 		code, freq = 0xff, nil
 		remaining = dt
 		totalDur = dt
@@ -325,7 +335,7 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 					setDelay(delayDur)
 				} else {
 					code, freq = Tone(b)
-					remaining = eventDur
+					remaining = roundTo(eventDur, step)
 					nextDelay = eventDur
 					totalDur = remaining
 				}
