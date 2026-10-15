@@ -204,6 +204,37 @@ func TestAMRWB(t *testing.T) {
 			})
 		}
 	})
+	t.Run("rtp octet", func(t *testing.T) {
+		const format = RTPOctetAligned
+		for mi, mode := range modes {
+			t.Run(fmt.Sprintf("mode %d", mi), func(t *testing.T) {
+				// Octet-aligned TOC matches the storage frame header (F=0),
+				// so each block must be the storage block prefixed by the CMR byte.
+				ref := encodeAMR(t, Storage, mode, frames)
+
+				blocks := encodeAMR(t, format, mode, frames)
+				t.Logf("block: %x", blocks[selFrame])
+				if len(blocks) != len(ref) {
+					t.Fatalf("unexpected block count: %d vs %d", len(blocks), len(ref))
+				}
+				for i, b := range blocks {
+					if len(b) == 0 || b[0] != 0xf0 || !slices.Equal([]byte(b[1:]), []byte(ref[i])) {
+						t.Fatalf("unexpected block %d: %x (storage: %x)", i, b, ref[i])
+					}
+				}
+
+				name := fmt.Sprintf("testdata_rtp_octet_mode_%d", mode)
+
+				out := decodeAMR(t, format, blocks)
+
+				hashOut := dumpPCM(t, name+".s16le", out)
+				ffmpegPCMFileToOGG(t, name+".s16le")
+				if !slices.Contains(pcmHash[mi], hashOut) {
+					t.Errorf("unexpected output hash %s", hashOut)
+				}
+			})
+		}
+	})
 }
 
 func readOGG() []media.PCM16Sample {
