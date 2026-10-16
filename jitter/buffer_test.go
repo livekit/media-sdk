@@ -319,117 +319,145 @@ func TestPacketsReordered(t *testing.T) {
 	require.Equal(t, 1, notified, "stats handler should report the reorder")
 }
 
-func TestSequenceRestart(t *testing.T) {
-	delivered := 0
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency,
-		func(pkts []ExtPacket) { delivered += len(pkts) }, WithSequenceRestartDetection())
-	defer b.Close()
-
-	push := func(seq uint16) {
-		s := &stream{ssrc: 0xc1a417, seq: seq}
-		b.Push(s.gen(true, true))
-	}
-	for i := 0; i <= 349; i++ { // partial first loop
-		push(uint16(i))
-	}
-	for loop := 0; loop < 2; loop++ { // two full loops
-		for i := 0; i <= 801; i++ {
-			push(uint16(i))
-		}
-	}
-	for i := 0; i <= 999; i++ { // final segment, runs past the loop point
-		push(uint16(i))
-	}
-
-	// each restart costs the packets seen before the run is recognised
-	lost := uint64(3 * (sequenceRestartRun - 1))
-	checkStats(t, b, &BufferStats{
-		PacketsPushed:    2954,
-		PacketsDropped:   lost,
-		PacketsPopped:    2954 - lost,
-		SamplesPopped:    2954 - lost,
-		SequenceRestarts: 3,
-	})
-	require.Equal(t, int(2954-lost), delivered)
+// lineTest pushes packets on one SSRC with arrival times, as an audio sender
+// would, and counts delivery per source. The source is carried in the RTP
+// timestamp.
+type lineTest struct {
+	b    *Buffer
+	t0   time.Time
+	n    int // next slot for run
+	got  map[uint32]int
+	seqs []uint16
 }
 
-// A false positive rewinds prevSN into the stale burst and replays the rest.
-func TestSequenceRestartFalsePositive(t *testing.T) {
-	var got []uint16
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func(p []ExtPacket) {
+const (
+	srcA = 'A'
+	srcB = 'B'
+)
+
+func newLineTest() *lineTest {
+	l := &lineTest{t0: time.Now().Add(-time.Hour), got: map[uint32]int{}}
+	l.b = NewBuffer(&testDepacketizer{}, testBufferLatency, func(p []ExtPacket) {
 		for _, x := range p {
-			got = append(got, x.SequenceNumber)
+			l.got[x.Timestamp]++
+			l.seqs = append(l.seqs, x.SequenceNumber)
 		}
 	}, WithSequenceRestartDetection())
-	defer b.Close()
-	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
+	return l
+}
 
-	for i := 100; i <= 300; i++ { // healthy stream, prevSN = 300
-		push(uint16(i))
-	}
-	n := len(got)
-	for i := 150; i <= 250; i++ { // one long ascending run of late packets
-		push(uint16(i))
-	}
+func (l *lineTest) push(at time.Duration, seq int, src uint32) {
+	pkt := (&stream{ssrc: 7, seq: uint16(seq)}).gen(true, true)
+	pkt.Timestamp = src
+	l.b.PushAt(pkt, l.t0.Add(at))
+}
 
-	first := uint16(150 + sequenceRestartRun - 1) // trips the run
-	require.Equal(t, uint64(1), b.Stats().SequenceRestarts)
-	require.Equal(t, uint64(sequenceRestartRun-1), b.Stats().PacketsDropped)
-	require.Equal(t, first, got[n], "first replayed packet")
-	require.Len(t, got[n:], 250-int(first)+1, "rest of the burst is replayed")
+// run pushes sequence numbers first..last from srcA, one per 20ms slot.
+func (l *lineTest) run(first, last int) {
+	for i := first; i <= last; i++ {
+		l.push(slot(l.n), i, srcA)
+		l.n++
+	}
+}
+
+func slot(i int) time.Duration { return time.Duration(i) * 20 * time.Millisecond }
+
+// A media file looping back to sequence 0 on the same SSRC
+// (SCL_mwhYqDjdFj2w). The old line stops, so the new one takes over once it
+// has been quiet for lineQuiet: two packets per restart.
+func TestSequenceRestart(t *testing.T) {
+	l := newLineTest()
+	defer l.b.Close()
+
+	l.run(0, 349)
+	l.run(0, 801)
+	l.run(0, 801)
+	l.run(0, 999)
+
+	checkStats(t, l.b, &BufferStats{
+		PacketsPushed:    2954,
+		PacketsDropped:   6,
+		PacketsPopped:    2948,
+		SamplesPopped:    2948,
+		SequenceRestarts: 3,
+		PacketsStray:     6,
+	})
 }
 
 // A transfer can re-anchor the same SSRC far behind prevSN, beyond the reorder
-// window. That cannot be a late packet, so it resyncs after a short run instead
-// of the full sequenceRestartRun. Captured call: 21294 -> 12676.
+// window. Captured call: 21294 -> 12676.
 func TestSequenceRestartFar(t *testing.T) {
-	var got []uint16
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func(p []ExtPacket) {
-		for _, x := range p {
-			got = append(got, x.SequenceNumber)
-		}
-	}, WithSequenceRestartDetection())
-	defer b.Close()
-	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
+	l := newLineTest()
+	defer l.b.Close()
 
-	for i := 21245; i <= 21294; i++ {
-		push(uint16(i))
-	}
-	for i := 12676; i < 12676+50; i++ {
-		push(uint16(i))
-	}
+	l.run(21245, 21294)
+	l.run(12676, 12725)
 
-	lost := uint64(farSequenceRestartRun - 1)
-	checkStats(t, b, &BufferStats{
+	checkStats(t, l.b, &BufferStats{
 		PacketsPushed:    100,
-		PacketsDropped:   lost,
-		PacketsPopped:    100 - lost,
-		SamplesPopped:    100 - lost,
+		PacketsDropped:   2,
+		PacketsPopped:    98,
+		SamplesPopped:    98,
 		SequenceRestarts: 1,
+		PacketsStray:     2,
 	})
-	require.Equal(t, uint16(12676+lost), got[50], "new stream resumes after the short run")
+	require.Equal(t, uint16(12678), l.seqs[50])
 }
 
 // A lone stale packet from beyond the window must not rewind the stream.
 func TestSequenceRestartFarStray(t *testing.T) {
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, func([]ExtPacket) {}, WithSequenceRestartDetection())
-	defer b.Close()
-	push := func(seq uint16) { s := &stream{ssrc: 7, seq: seq}; b.Push(s.gen(true, true)) }
+	l := newLineTest()
+	defer l.b.Close()
 
-	for i := 21245; i <= 21294; i++ {
-		push(uint16(i))
-	}
-	push(12676)
-	for i := 21295; i < 21295+50; i++ {
-		push(uint16(i))
-	}
+	l.run(21245, 21294)
+	l.push(slot(l.n)-10*time.Millisecond, 12676, srcA)
+	l.run(21295, 21344)
 
-	checkStats(t, b, &BufferStats{
+	checkStats(t, l.b, &BufferStats{
 		PacketsPushed:  101,
 		PacketsDropped: 1,
 		PacketsPopped:  100,
 		SamplesPopped:  100,
+		PacketsStray:   1,
 	})
+}
+
+// Late packets close behind the line are expired as usual, not a new line.
+func TestSequenceLateBurst(t *testing.T) {
+	l := newLineTest()
+	defer l.b.Close()
+
+	l.run(100, 300)
+	for i := 250; i <= 299; i++ { // all at once
+		l.push(slot(l.n), i, srcA)
+	}
+	l.run(301, 350)
+
+	checkStats(t, l.b, &BufferStats{
+		PacketsPushed:  301,
+		PacketsDropped: 50,
+		PacketsPopped:  251,
+		SamplesPopped:  251,
+	})
+}
+
+// A burst further behind than lineBehind, arriving back-to-back, out-delivers
+// the live line and is taken for a new one. Not seen on audio, which is why
+// detection is opt-in: on video this is a NACK burst for a lost keyframe.
+func TestSequenceLateBurstFalsePositive(t *testing.T) {
+	l := newLineTest()
+	defer l.b.Close()
+
+	l.run(100, 300)
+	n := len(l.seqs)
+	for i := 150; i <= 250; i++ { // all at once
+		l.push(slot(l.n), i, srcA)
+	}
+
+	// the live line has 15 packets in lineWindow, so the burst wins at 30
+	require.Equal(t, uint64(1), l.b.Stats().SequenceRestarts)
+	require.Equal(t, uint64(29), l.b.Stats().PacketsStray)
+	require.Equal(t, []uint16{179, 250}, []uint16{l.seqs[n], l.seqs[len(l.seqs)-1]})
 }
 
 // Restart detection is opt-in: by default a restart is discarded as expired
@@ -442,19 +470,118 @@ func TestSequenceRestartDisabled(t *testing.T) {
 	for i := 21245; i <= 21294; i++ {
 		push(uint16(i))
 	}
-	for i := 21000; i < 21000+sequenceRestartRun; i++ { // near run
+	for i := 21000; i < 21000+20; i++ { // near run
 		push(uint16(i))
 	}
-	for i := 12676; i < 12676+farSequenceRestartRun; i++ { // far run
+	for i := 12676; i < 12676+2; i++ { // far run
 		push(uint16(i))
 	}
 
 	checkStats(t, b, &BufferStats{
-		PacketsPushed:  50 + sequenceRestartRun + farSequenceRestartRun,
-		PacketsDropped: sequenceRestartRun + farSequenceRestartRun,
+		PacketsPushed:  72,
+		PacketsDropped: 22,
 		PacketsPopped:  50,
 		SamplesPopped:  50,
 	})
+}
+
+// Silence suppression stops packets without a new line, and real loss is a
+// gap on the same line.
+func TestLineSilenceAndLoss(t *testing.T) {
+	l := newLineTest()
+	defer l.b.Close()
+
+	for i := 0; i < 10; i++ { // 1s talk, 1s silence
+		l.run(1000+50*i, 1049+50*i)
+		l.n += 50
+	}
+	l.run(1892, 2000) // 392 lost
+
+	checkStats(t, l.b, &BufferStats{
+		PacketsPushed: 609,
+		PacketsLost:   392,
+		PacketsPopped: 609,
+		SamplesPopped: 609,
+	})
+}
+
+// Two sources on one SSRC, each slot 20ms. gen returns the sequence numbers A
+// and B send in slot i, or -1; B arrives delay after A.
+func TestTwoLines(t *testing.T) {
+	pause := func(i, from, n int) bool { return i >= from && i < from+n }
+	sparse := func(i int) bool { return i%9 == 4 || i%9 == 5 } // 2 of 9 slots
+	or := func(ok bool, seq int) int {
+		if ok {
+			return seq
+		}
+		return -1
+	}
+	silentSeq := 999
+	for _, c := range []struct {
+		name     string
+		slots    int
+		delay    time.Duration
+		gen      func(i int) (a, b int)
+		a, b     int // packets delivered
+		restarts uint64
+	}{
+		// B2BUA interleaving a sparse second source 392 ahead (SCL_n6cVRuyyFN2M)
+		{"sparse ahead", 1500, 4 * time.Millisecond, func(i int) (int, int) {
+			return or(i < 500 || i%9 != 4, 1000+i), or(i >= 500 && sparse(i), 1392+i)
+		}, 1389, 0, 0},
+		// two full-rate lines: nothing to prefer, so the playing one stays
+		{"dense ahead", 1500, 4 * time.Millisecond, func(i int) (int, int) {
+			return 1000 + i, or(i >= 500, 1392+i)
+		}, 1500, 0, 0},
+		// the playing line trickles: the full-rate line takes over, ahead in the
+		// first quiet gap as loss, behind on rate as a restart
+		{"trickle, B ahead", 1500, 4 * time.Millisecond, func(i int) (int, int) {
+			return or(i < 500 || i%9 < 2, 1000+i), or(i >= 500, 1392+i)
+		}, 500, 998, 0},
+		{"trickle, B behind", 1500, 4 * time.Millisecond, func(i int) (int, int) {
+			return or(i < 500 || i%9 < 2, 1000+i), or(i >= 500, 608+i)
+		}, 500, 998, 1},
+		// new source on the same SSRC, the old one trailing for 55ms
+		{"handover", 1500, 25 * time.Millisecond, func(i int) (int, int) {
+			return or(i <= 504, 1000+i), or(i >= 500, 1500+i)
+		}, 505, 994, 0},
+		// a 500ms pause on A is too short for the parallel sparse line to take over
+		{"sparse ahead, A silent", 1500, 4 * time.Millisecond, func(i int) (int, int) {
+			a := -1
+			if (i < 500 || i%9 != 4) && !pause(i, 900, 25) {
+				silentSeq++
+				a = silentSeq
+			}
+			return a, or(i >= 500 && sparse(i), 1392+i)
+		}, 1367, 0, 0},
+		// two full-rate lines for the whole call (SCL_sskecEKAj9eR): a loss
+		// burst on A does not hand over the call, a 1s outage does
+		{"parallel, A loses 120ms", 600, 10 * time.Millisecond, func(i int) (int, int) {
+			return or(!pause(i, 200, 6), 1630+i), 1000 + i
+		}, 594, 0, 0},
+		{"parallel, A loses 300ms", 600, 10 * time.Millisecond, func(i int) (int, int) {
+			return or(!pause(i, 200, 15), 1630+i), 1000 + i
+		}, 585, 0, 0},
+		{"parallel, A loses 1s", 600, 10 * time.Millisecond, func(i int) (int, int) {
+			return or(!pause(i, 200, 50), 1630+i), 1000 + i
+		}, 200, 376, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l := newLineTest()
+			defer l.b.Close()
+			for i := 0; i < c.slots; i++ {
+				a, b := c.gen(i)
+				if a >= 0 {
+					l.push(slot(i), a, srcA)
+				}
+				if b >= 0 {
+					l.push(slot(i)+c.delay, b, srcB)
+				}
+			}
+			require.Equal(t, []int{c.a, c.b}, []int{l.got[srcA], l.got[srcB]}, "delivered A, B")
+			require.Equal(t, c.restarts, l.b.Stats().SequenceRestarts)
+		})
+	}
 }
 
 // A finished stream sending late packets must not stall the active one.
@@ -551,6 +678,7 @@ func checkStats(t *testing.T, b *Buffer, expected *BufferStats) {
 	require.Equal(t, expected.SSRCSwitches, stats.SSRCSwitches)
 	require.Equal(t, expected.PacketsReordered, stats.PacketsReordered)
 	require.Equal(t, expected.SequenceRestarts, stats.SequenceRestarts)
+	require.Equal(t, expected.PacketsStray, stats.PacketsStray)
 }
 
 type stream struct {
