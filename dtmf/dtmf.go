@@ -35,7 +35,8 @@ const (
 
 var (
 	// OfferLegacyRate forces DTMF to advertise/negotiate 8000 sample rate, even if the codec has a higher sample rate.
-	OfferLegacyRate = false
+	// Enabled by default: some peers support no other rate, and offering it as a fallback keeps DTMF working for them.
+	OfferLegacyRate = true
 )
 
 func init() {
