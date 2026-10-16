@@ -41,6 +41,10 @@ func init() {
 			return media.CodecInfo{}, nil, false
 		case 0, 1, 2:
 		}
+		if c.Channels == 0 {
+			// RFC 7587 requires the number of channels in SDP to be 2, even if the stream is mono.
+			c.Channels = 2
+		}
 		const defRate = 48000
 		if c.SampleRate == 0 {
 			c.SampleRate = 48000
