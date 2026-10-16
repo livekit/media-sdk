@@ -581,9 +581,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 	})
 
 	t.Run("legacy offer", func(t *testing.T) {
-		// Check compatibility path - offer DTMF at 8000, even if codec is 16000.
-		dtmf.OfferLegacyRate = true
-		defer func() { dtmf.OfferLegacyRate = false }()
+		// DTMF at 8000 is offered as a fallback by default, even if the codec is 16000.
 		g := media.NewCodecSet()
 		g.SetEnabled(amrwb.SDPNameOnly, true)
 		g.SetEnabled(dtmf.SDPNameOnly, true)
@@ -604,6 +602,34 @@ func TestSDPMediaAnswer(t *testing.T) {
 				{Key: "fmtp", Value: "102 0-16"},
 				{Key: "rtpmap", Value: "103 telephone-event/16000"},
 				{Key: "fmtp", Value: "103 0-16"},
+				{Key: "ptime", Value: "20"},
+				{Key: "sendrecv"},
+			},
+		}, offer)
+	})
+
+	t.Run("no legacy offer", func(t *testing.T) {
+		// DTMF at 8000 can be disabled if the codec is 16000.
+		dtmf.OfferLegacyRate = false
+		defer func() { dtmf.OfferLegacyRate = true }()
+		g := media.NewCodecSet()
+		g.SetEnabled(amrwb.SDPNameOnly, true)
+		g.SetEnabled(dtmf.SDPNameOnly, true)
+
+		_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+		require.NoError(t, err)
+		require.Equal(t, &sdp.MediaDescription{
+			MediaName: sdp.MediaName{
+				Media:   "audio",
+				Port:    sdp.RangedPort{Value: port},
+				Protos:  []string{"RTP", "AVP"},
+				Formats: []string{"101", "102"},
+			},
+			Attributes: []sdp.Attribute{
+				{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+				{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
+				{Key: "rtpmap", Value: "102 telephone-event/16000"},
+				{Key: "fmtp", Value: "102 0-16"},
 				{Key: "ptime", Value: "20"},
 				{Key: "sendrecv"},
 			},
