@@ -565,6 +565,12 @@ func TestTwoLines(t *testing.T) {
 		{"parallel, A loses 1s", 600, 10 * time.Millisecond, func(i int) (int, int) {
 			return or(!pause(i, 200, 50), 1630+i), 1000 + i
 		}, 200, 376, 1},
+		// a sparse line at one packet per second, ahead of A until A catches up
+		// with it. Near the crossing it is within lineAhead of A but continues
+		// its own line, so it stays stray.
+		{"sparse crossing", 200, 4 * time.Millisecond, func(i int) (int, int) {
+			return 1000 + i, or(i%50 == 0, 1120+i/50)
+		}, 200, 0, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l := newLineTest()

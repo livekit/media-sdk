@@ -51,7 +51,7 @@ const (
 )
 
 type seqLine struct {
-	ok     bool
+	ok     bool        // the line has a packet; false until add, and after reset
 	high   uint16      // highest sequence number on the line
 	first  time.Time   // arrival of the line's first packet
 	lastAt time.Time   // arrival of the line's latest packet
@@ -60,6 +60,18 @@ type seqLine struct {
 
 func (l *seqLine) fits(sn uint16) bool {
 	return l.ok && (sn-l.high <= lineAhead || l.high-sn <= lineBehind)
+}
+
+// continues reports whether sn is closer to the next packet on l than to the
+// next packet on the playing line, whose highest sequence number is high. Both
+// must be forward steps, and sn within lineAhead of high.
+//
+// Without this, a packet from a sparse line just ahead of the playing line
+// fits the playing line as a gap. The buffer then skips to it, and the playing
+// packets in between arrive too late and are dropped.
+func (l *seqLine) continues(sn, high uint16) bool {
+	step, jump := sn-l.high, sn-high
+	return l.ok && step >= 1 && step < jump && jump <= lineAhead
 }
 
 func (l *seqLine) add(sn uint16, at time.Time) {
@@ -100,7 +112,7 @@ type lineVote struct {
 // lines first if sn's line should take over. Caller must hold b.mu.
 func (b *Buffer) acceptLine(sn uint16, at time.Time) bool {
 	v := &b.lines
-	if !v.cur.ok || v.cur.fits(sn) {
+	if !v.cur.ok || (v.cur.fits(sn) && !v.alt.continues(sn, v.cur.high)) {
 		v.cur.add(sn, at)
 		return true
 	}
