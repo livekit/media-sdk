@@ -60,8 +60,11 @@ func init() {
 			return media.CodecInfo{}, nil, false
 		}
 		const (
-			paramOctetAlign = "octet-align"
-			paramModeSet    = "mode-set"
+			paramOctetAlign    = "octet-align"
+			paramModeSet       = "mode-set"
+			paramCRC           = "crc"
+			paramRobustSorting = "robust-sorting"
+			paramInterleaving  = "interleaving"
 		)
 		var (
 			format   = RTPBandwidthEfficient
@@ -78,6 +81,16 @@ func init() {
 			accepted.Add(paramOctetAlign, "1")
 		default:
 			return media.CodecInfo{}, nil, false
+		}
+
+		// CRC, robust sorting and interleaving change the payload format or
+		// frame order, and none of them is implemented. RFC 4867 8.3.1 does
+		// not allow answering them with anything but the offered value, so
+		// offers enabling them must be rejected instead.
+		for _, key := range []string{paramCRC, paramRobustSorting, paramInterleaving} {
+			if v, ok := c.Params.Get(key); ok && v != "0" && v != "" {
+				return media.CodecInfo{}, nil, false
+			}
 		}
 
 		// Pick the best mode the peer can support.
