@@ -47,10 +47,8 @@ type Buffer struct {
 	ssrc        uint32
 	hasSSRC     bool
 
-	detectRestarts bool   // see WithSequenceRestartDetection
-	restartRun     int    // consecutive expired packets, ascending
-	restartPrevSN  uint16 // sequence number of the last expired packet
-	restartFar     bool   // the run started beyond the reorder window
+	detectRestarts bool // see WithSequenceRestartDetection
+	lines          lineVote
 	head           *packet
 	tail           *packet
 
@@ -72,7 +70,8 @@ type BufferStats struct {
 	SamplesPopped    uint64 // samples sent to handler
 	SSRCSwitches     uint64 // times the buffer re-synced onto a new SSRC
 	PacketsReordered uint64 // packets put back in sequence
-	SequenceRestarts uint64 // sender restarted its sequence, same SSRC
+	SequenceRestarts uint64 // times the buffer re-synced onto another sequence line, same SSRC
+	PacketsStray     uint64 // packets dropped for belonging to a sequence line that is not playing (also in PacketsDropped)
 }
 
 type PacketFunc func(packets []ExtPacket)
@@ -136,14 +135,16 @@ func WithStatsHandler(handler StatsFunc) Option {
 	}
 }
 
-// WithSequenceRestartDetection re-syncs when the sender restarts its sequence
-// numbering on the same SSRC, instead of discarding the new sequence until it
-// catches up to prevSN.
+// WithSequenceRestartDetection tracks sequence lines on the same SSRC: it
+// re-syncs when the sender restarts or re-anchors its sequence numbering,
+// instead of discarding the new sequence until it catches up to prevSN, and
+// keeps a second line interleaved on the SSRC from silencing the playing one.
 //
-// Detection counts packets, so it is only safe at audio packet rates. On video,
-// a late burst of retransmits (e.g. NACKs for a lost keyframe) can arrive
-// back-to-back with no live packet in between and be mistaken for a restart,
-// which drops the frame being assembled and stalls output for one latency.
+// Lines are compared by packet counts and arrival gaps tuned for audio, so it
+// is only safe at audio packet rates. On video, a late burst of retransmits
+// (e.g. NACKs for a lost keyframe) can arrive back-to-back and out-deliver the
+// live line, which drops the frame being assembled and stalls output for one
+// latency.
 func WithSequenceRestartDetection() Option {
 	return func(b *Buffer) {
 		b.detectRestarts = true
@@ -224,6 +225,7 @@ func (b *Buffer) statsLocked() *BufferStats {
 		SSRCSwitches:     b.stats.SSRCSwitches,
 		PacketsReordered: b.stats.PacketsReordered,
 		SequenceRestarts: b.stats.SequenceRestarts,
+		PacketsStray:     b.stats.PacketsStray,
 	}
 }
 
@@ -253,15 +255,8 @@ func (b *Buffer) switchStream(ssrc uint32) {
 	b.resetStream()
 
 	b.ssrc = ssrc
+	b.lines = lineVote{}
 	b.stats.SSRCSwitches++
-	b.notifyStats()
-}
-
-// restartStream re-syncs after a sequence restart on the same SSRC.
-func (b *Buffer) restartStream() {
-	b.resetStream()
-
-	b.stats.SequenceRestarts++
 	b.notifyStats()
 }
 
@@ -272,9 +267,6 @@ func (b *Buffer) resetStream() {
 
 	b.initialized = false
 	b.prevSN = 0
-	b.restartRun = 0
-	b.restartPrevSN = 0
-	b.restartFar = false
 }
 
 // reordered records a packet that arrived out of sequence and is being placed
@@ -282,27 +274,6 @@ func (b *Buffer) resetStream() {
 func (b *Buffer) reordered() {
 	b.stats.PacketsReordered++
 	b.notifyStats()
-}
-
-// sequenceRestart reports whether the expired packets so far look like a sender
-// restarting its sequence numbering. A restart keeps counting up with nothing
-// accepted in between; late packets stop expiring once they pass prevSN.
-// A run that starts beyond the reorder window cannot be late packets, so it
-// needs only farSequenceRestartRun.
-// Caller must hold b.mu.
-func (b *Buffer) sequenceRestart(sn uint16) bool {
-	if b.restartRun > 0 && !before(sn, b.restartPrevSN) && withinRange(sn, b.restartPrevSN) {
-		b.restartRun++
-	} else {
-		b.restartRun = 1
-		b.restartFar = !withinRange(sn, b.prevSN)
-	}
-	b.restartPrevSN = sn
-
-	if b.restartFar {
-		return b.restartRun >= farSequenceRestartRun
-	}
-	return b.restartRun >= sequenceRestartRun
 }
 
 // push adds a packet to the buffer
@@ -324,21 +295,28 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		b.switchStream(pkt.SSRC)
 	}
 
-	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
-		if !b.detectRestarts || !b.sequenceRestart(pkt.SequenceNumber) {
-			// packet expired
-			if !pkt.Padding {
-				b.stats.PacketsDropped++
-				if b.onPacketLoss != nil {
-					b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
-				}
+	if b.detectRestarts && !b.acceptLine(pkt.SequenceNumber, receivedAt) {
+		// stray from a sequence line that is not playing
+		if !pkt.Padding {
+			b.stats.PacketsStray++
+			b.stats.PacketsDropped++
+			if b.onPacketLoss != nil {
+				b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 			}
-			return
 		}
-		b.restartStream()
+		return
 	}
-	// an accepted packet ends any run of expired ones
-	b.restartRun = 0
+
+	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
+		// packet expired
+		if !pkt.Padding {
+			b.stats.PacketsDropped++
+			if b.onPacketLoss != nil {
+				b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+			}
+		}
+		return
+	}
 
 	p := b.newPacket(pkt, receivedAt)
 
@@ -542,18 +520,6 @@ func (b *Buffer) popHead() *packet {
 	}
 	return c
 }
-
-// sequenceRestartRun is how many consecutive ascending expired packets are read
-// as a sequence restart. At 20ms audio packets, a run this long needs the live
-// stream to go silent for ~400ms while old packets arrive in order, since any
-// accepted packet zeroes the run. At video rates it does not, hence opt-in.
-const sequenceRestartRun = 20
-
-// farSequenceRestartRun is the run needed when it starts beyond the reorder
-// window of prevSN. At audio rates a packet that far behind (~60s) is not late,
-// but a lone stale one should not rewind the stream, so it still takes a second
-// packet to confirm.
-const farSequenceRestartRun = 2
 
 // missingBetween returns how many packets are missing between prevSN and sn.
 // sn must be ahead of prevSN; equal or behind wraps the subtraction to ~65535.
