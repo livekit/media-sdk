@@ -262,6 +262,15 @@ func (s *Stream) ResetTimestamp(ts uint32) {
 	s.followup = false
 }
 
+// make next event have an in-sync timestamp to audio
+// Relies on non-stop audio traffic.
+func (s *Stream) SyncEventTimestamp() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ev.Timestamp = s.s.maxTS.Load() // TODO: Consider sending the next timestamp instead
+	s.followup = false
+}
+
 func (s *Stream) GetCurrentTimestamp() uint32 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
