@@ -165,12 +165,6 @@ func TestDTMFDelay(t *testing.T) {
 				}
 			}()
 
-			type packet struct {
-				SequenceNumber uint16
-				Timestamp      uint32
-				Marker         bool
-				Event
-			}
 			var exp []Event
 			frameSamples := func(rate int, frameDur time.Duration) uint32 {
 				return uint32(time.Duration(rate) * frameDur / time.Second)
