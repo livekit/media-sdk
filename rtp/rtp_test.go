@@ -2,6 +2,7 @@ package rtp
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -274,5 +275,72 @@ func TestRTPStreams(t *testing.T) {
 			})
 		}
 		require.Equal(t, exp, got)
+	})
+}
+
+// TestRTPStreamsWallClock checks that timestamps follow the wall clock when frames stop being written,
+// e.g. audio muted while DTMF events are sent.
+func TestRTPStreamsWallClock(t *testing.T) {
+	const audioRate, eventsRate = 48000, 8000
+	const inc = uint32(audioRate / DefFramesPerSec)
+
+	// writeFrames writes n audio frames paced in real time and returns the last timestamp written.
+	writeFrames := func(buf *Buffer, s *Stream, n int) uint32 {
+		for range n {
+			require.NoError(t, s.WritePayload([]byte{0}, false))
+			time.Sleep(DefFrameDur)
+		}
+		return (*buf)[len(*buf)-1].Timestamp
+	}
+	// requireFramesAfter checks that ts is gap after last, less one frame of jitter slack,
+	// allowing for oversleeping.
+	requireFramesAfter := func(last, ts uint32, gap time.Duration) {
+		frames := uint32(gap/DefFrameDur) - 1
+		require.GreaterOrEqual(t, ts, last+frames*inc)
+		require.LessOrEqual(t, ts, last+(frames+3)*inc)
+	}
+
+	t.Run("audio resumes after a gap", func(t *testing.T) {
+		var buf Buffer
+		audio := NewSeqWriter(&buf, WithWallclockAdjusted(true)).NewStream(96, audioRate)
+		last := writeFrames(&buf, audio, 5)
+
+		const gap = 30 * DefFrameDur
+		time.Sleep(gap - DefFrameDur) // writeFrames already slept one frame
+		require.NoError(t, audio.WritePayload([]byte{0}, false))
+		requireFramesAfter(last, buf[len(buf)-1].Timestamp, gap)
+	})
+
+	t.Run("catch-up burst is not counted twice", func(t *testing.T) {
+		var buf Buffer
+		audio := NewSeqWriter(&buf, WithWallclockAdjusted(true)).NewStream(96, audioRate)
+		last := writeFrames(&buf, audio, 5)
+
+		// A stall shorter than the drift threshold, followed by back-to-back catch-up writes.
+		time.Sleep(4 * DefFrameDur)
+		for range 5 {
+			require.NoError(t, audio.WritePayload([]byte{0}, false))
+		}
+		for i, p := range buf[len(buf)-5:] {
+			require.Equal(t, last+uint32(i+1)*inc, p.Timestamp)
+		}
+	})
+
+	t.Run("events without audio", func(t *testing.T) {
+		var buf Buffer
+		sw := NewSeqWriter(&buf, WithWallclockAdjusted(true))
+		audio := sw.NewStream(96, audioRate)
+		events := sw.NewStream(101, eventsRate)
+		last := writeFrames(&buf, audio, 5)
+
+		const gap = 30 * DefFrameDur
+		time.Sleep(gap - DefFrameDur)
+		require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, true))
+		evTS := buf[len(buf)-1].Timestamp
+		requireFramesAfter(last, evTS, gap)
+
+		// Audio resuming after the event must not go back behind it.
+		require.NoError(t, audio.WritePayload([]byte{0}, false))
+		require.GreaterOrEqual(t, buf[len(buf)-1].Timestamp, evTS)
 	})
 }

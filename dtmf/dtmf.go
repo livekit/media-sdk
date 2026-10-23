@@ -334,9 +334,6 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 					remaining = roundTo(eventDur, step)
 					nextDelay = eventDur
 					totalDur = remaining
-					if events != nil {
-						events.SyncEventTimestamp()
-					}
 				}
 			}
 		}
@@ -366,7 +363,10 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 			if err != nil {
 				return err
 			}
-			// all packets for a digit must be sent with the same timestamp
+			if first { // Must grab TS from audio stream
+				events.SyncEventTimestamp()
+				events.AdjustWallclockDelta()
+			}
 			err = events.WritePayloadAtCurrent(buf[:n], first)
 			if err != nil {
 				return err

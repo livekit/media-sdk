@@ -20,6 +20,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
@@ -28,6 +29,11 @@ import (
 )
 
 const rtpStreamTSResetFrames = 25 // 500ms @ ptime=20ms
+
+// After this many frames without a frame-advancing write, writes follow the wall clock.
+// Must exceed the longest burst of catch-up writes after a scheduler stall (mixer input buffer, 5 frames),
+// or the burst would be counted twice. Event syncs follow the wall clock without this threshold.
+const rtpStreamTSDriftFrames = 10 // 200ms @ ptime=20ms
 
 type BytesFrame interface {
 	media.BytesFrame
@@ -106,12 +112,15 @@ func (b *Buffer) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
 }
 
 // NewSeqWriter creates an RTP writer that automatically increments the sequence number.
-func NewSeqWriter(w Writer) *SeqWriter {
+func NewSeqWriter(w Writer, opts ...SeqWriterOpt) *SeqWriter {
 	s := &SeqWriter{w: w}
 	s.h = rtp.Header{
 		Version:        2,
 		SSRC:           rand.Uint32(),
 		SequenceNumber: 0,
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -126,15 +135,47 @@ type Event struct {
 	Marker    bool
 }
 
+type SeqWriterOpt func(*SeqWriter)
+
+func WithWallclockAdjusted(adjusted bool) SeqWriterOpt {
+	return func(s *SeqWriter) {
+		s.wallclockAdjusted = adjusted
+	}
+}
+
 type SeqWriter struct {
-	maxTS atomic.Uint32
-	mu    sync.Mutex
-	w     Writer
-	h     Header
+	maxTS             atomic.Uint32
+	maxTime           atomic.Value // time.Time
+	mu                sync.Mutex
+	w                 Writer
+	h                 Header
+	wallclockAdjusted bool
 }
 
 func (s *SeqWriter) String() string {
 	return s.w.String()
+}
+
+// Return the number of frames that have passed since the last packet by wall-clock time.
+func (s *SeqWriter) wallclockFrameDelta() uint32 {
+	// In the absence of original headers, or some metadata, there's no knowing
+	// the original timestamp (or timestamps for mixed audio) of these samples.
+	if !s.wallclockAdjusted {
+		return 0
+	}
+	now := time.Now()
+	last, ok := s.maxTime.Load().(time.Time)
+	s.maxTime.Store(now)
+	if !ok {
+		return 0
+	}
+	// Calculate now many "frames" do we need to add to the timestamp based on time since last packet
+	framesSince := now.Sub(last).Round(DefFrameDur) / DefFrameDur
+	framesSince -= 1 // The expected bump
+	if framesSince <= 0 {
+		framesSince = 0
+	}
+	return uint32(framesSince)
 }
 
 // CurTS requests a timestamp from the stream, using ts as a reference.
@@ -149,7 +190,7 @@ func (s *SeqWriter) CurTS(ts, inc uint32) uint32 {
 			return cur
 		}
 		if cur >= ts {
-			// Timestamp is withing allowed range.
+			// Timestamp is within allowed range.
 			return ts
 		}
 		// Adjust the max timestamp, make sure other stream didn't update it before us.
@@ -190,7 +231,7 @@ type Stream struct {
 	packetDur uint32
 	mu        sync.Mutex
 	ev        Event
-	followup  bool
+	maxTime   atomic.Value // time.Time
 }
 
 func (s *Stream) String() string {
@@ -205,36 +246,49 @@ func (s *Stream) WriteRaw(data []byte) error {
 	return s.WritePayload(data, false)
 }
 
-func (s *Stream) writePayload(inc bool, data []byte, marker bool) error {
+// Return the number of samples, rounded to full frames, that have passed since the last packet by wall-clock time.
+func (s *Stream) AdjustWallclockDelta() {
+	framesSince := s.s.wallclockFrameDelta()
+	s.ev.Timestamp += framesSince * s.packetDur
+	for {
+		cur := s.s.maxTS.Load()
+		if cur >= s.ev.Timestamp {
+			return
+		}
+		if s.s.maxTS.CompareAndSwap(cur, s.ev.Timestamp) {
+			return
+		}
+	}
+}
+
+func (s *Stream) writePayload(preserveLastTS bool, data []byte, marker bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ev.Payload = data
 	s.ev.Marker = marker
-	if !s.followup {
+	if !preserveLastTS {
+		s.AdjustWallclockDelta()
 		s.ev.Timestamp = s.s.CurTS(s.ev.Timestamp, s.packetDur)
 	}
 	if err := s.s.WriteEvent(&s.ev); err != nil {
 		return err
 	}
-	if inc {
-		s.followup = false
+	if !preserveLastTS {
 		s.ev.Timestamp += s.packetDur
-	} else {
-		s.followup = true
 	}
 	return nil
 }
 
 // WritePayload writes the payload to RTP and increments the timestamp.
 func (s *Stream) WritePayload(data []byte, marker bool) error {
-	return s.writePayload(true, data, marker)
+	return s.writePayload(false, data, marker)
 }
 
 // WritePayloadAtCurrent writes the payload to RTP at the current timestamp.
 // This allows to emit multiple different payloads with the same timestamp in this stream (e.g. DTMF).
 // The caller is expected to call Delay or DelayN at some point to advances the timestamp.
 func (s *Stream) WritePayloadAtCurrent(data []byte, marker bool) error {
-	return s.writePayload(false, data, marker)
+	return s.writePayload(true, data, marker)
 }
 
 // Delay advances the timestamp of the next frame. Typically used in combination with WritePayloadAtCurrent.
@@ -243,7 +297,6 @@ func (s *Stream) Delay(dur uint32) {
 	defer s.mu.Unlock()
 	s.ev.Timestamp += dur
 	s.ev.Timestamp = s.s.CurTS(s.ev.Timestamp, s.packetDur)
-	s.followup = false
 }
 
 // DelayN is similar to Delay, but it increments time in multiples of the frame durations.
@@ -254,21 +307,12 @@ func (s *Stream) DelayN(n int) {
 	s.Delay(uint32(n) * s.packetDur)
 }
 
-func (s *Stream) ResetTimestamp(ts uint32) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.ev.Timestamp = ts
-	s.followup = false
-}
-
 // make next event have an in-sync timestamp to audio
 // Relies on non-stop audio traffic.
 func (s *Stream) SyncEventTimestamp() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ev.Timestamp = s.s.maxTS.Load() // TODO: Consider sending the next timestamp instead
-	s.followup = false
 }
 
 func (s *Stream) GetCurrentTimestamp() uint32 {
