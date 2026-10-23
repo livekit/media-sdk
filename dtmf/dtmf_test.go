@@ -17,7 +17,8 @@ package dtmf
 import (
 	"context"
 	"encoding/hex"
-	"strconv"
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -131,85 +132,134 @@ func TestDecodeRTPWithEnd(t *testing.T) {
 }
 
 func TestDTMFDelay(t *testing.T) {
-	const startTime = 1242
-
-	for _, eventsRate := range []int{
-		8000, 16000,
+	for _, c := range []struct {
+		audioRate  int
+		eventsRate int
+	}{
+		{8000, 8000},
+		{8000, 16000},
+		{16000, 8000},
+		{16000, 16000},
 	} {
-		t.Run(strconv.Itoa(eventsRate), func(t *testing.T) {
+		t.Run(fmt.Sprintf("audio-%d-events-%d", c.audioRate, c.eventsRate), func(t *testing.T) {
+			const audioPT, eventsPT = 96, 101
 			var buf rtp.Buffer
-			w := rtp.NewSeqWriter(&buf).NewStream(101, eventsRate)
-			err := Write(context.Background(), nil, w, eventsRate, startTime, "1w23")
-			require.NoError(t, err)
+			sw := rtp.NewSeqWriter(&buf)
+			audio := sw.NewStream(audioPT, c.audioRate)
+			events := sw.NewStream(eventsPT, c.eventsRate)
 
-			type packet struct {
-				SequenceNumber uint16
-				Timestamp      uint32
-				Marker         bool
-				Event
+			t.Log("sending continuous audio stream")
+			ctx, cancel := context.WithCancel(t.Context())
+			audioDone := make(chan struct{})
+			go func() {
+				defer close(audioDone)
+				ticker := time.NewTicker(rtp.DefFrameDur)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						_ = audio.WritePayload([]byte{0}, false)
+					}
+				}
+			}()
+
+			var exp []Event
+			frameSamples := func(rate int, frameDur time.Duration) uint32 {
+				return uint32(time.Duration(rate) * frameDur / time.Second)
 			}
-			var (
-				exp []packet
-				seq uint16
-				ts  uint32
-			)
-			packetDur := uint32(eventsRate / int(time.Second/rtp.DefFrameDur))
+			durationToSamples := func(dur time.Duration, rate int) uint32 {
+				return uint32(time.Duration(rate) * dur / time.Second)
+			}
+			packetDur := frameSamples(c.eventsRate, rtp.DefFrameDur)
+			audioPacketDur := frameSamples(c.audioRate, rtp.DefFrameDur)
 
-			ts = startTime
-
-			expectDigit := func(code byte, digit byte) {
-				start := ts
+			expectDigit := func(code byte, digit byte) []Event {
+				var generated []Event
 				const n = 13
 				for i := 0; i < n-1; i++ {
-					exp = append(exp, packet{
-						SequenceNumber: seq,
-						Timestamp:      start, // should be the same for all events
-						Marker:         i == 0,
-						Event: Event{
-							Code:   code,
-							Digit:  digit,
-							Volume: eventVolume,
-							Dur:    uint16(i+1) * uint16(packetDur),
-							End:    false,
-						},
+					generated = append(generated, Event{
+						Code:   code,
+						Digit:  digit,
+						Volume: eventVolume,
+						Dur:    uint16(i+1) * uint16(packetDur),
+						End:    false,
 					})
-					ts += packetDur
-					seq++
 				}
 				// end event must be sent 3 times with the same duration
 				for i := 0; i < 3; i++ {
-					exp = append(exp, packet{
-						SequenceNumber: seq,
-						Timestamp:      start, // should be the same for all events
-						Marker:         false,
-						Event: Event{
-							Code:   code,
-							Digit:  digit,
-							Volume: eventVolume,
-							Dur:    uint16(n) * uint16(packetDur),
-							End:    true,
-						},
+					generated = append(generated, Event{
+						Code:   code,
+						Digit:  digit,
+						Volume: eventVolume,
+						Dur:    uint16(n) * uint16(packetDur),
+						End:    true,
 					})
-					seq++
 				}
-				ts += packetDur
-				// delay between digits, same number of frames as the tone
-				ts += n * packetDur
+				return generated
 			}
-			expectDigit(1, '1')
-			ts += uint32(eventsRate) / 2 // 500ms delay
-			expectDigit(2, '2')
-			expectDigit(3, '3')
-			var got []packet
-			for _, p := range buf {
-				e, err := Decode(p.Payload)
-				require.NoError(t, err)
-				got = append(got, packet{
-					SequenceNumber: p.SequenceNumber,
-					Timestamp:      p.Timestamp,
-					Marker:         p.Marker,
-					Event:          e,
-				})
+
+			exp = append(exp, expectDigit(1, '1')...)
+			exp = append(exp, expectDigit(2, '2')...)
+			exp = append(exp, expectDigit(3, '3')...)
+			exp = append(exp, expectDigit(4, '4')...)
+			delayBetweenDigits := eventDur
+			expectedDelay := []time.Duration{
+				-1, // Don't care how long until the first event
+				eventDur + delayBetweenDigits,
+				eventDur + delayBetweenDigits + delayDur,
+				eventDur + delayBetweenDigits,
+			}
+
+			time.Sleep(5 * rtp.DefFrameDur)
+
+			t.Log("sending DTMF events")
+			err := Write(t.Context(), nil, events, c.eventsRate, "12w34")
+			cancel()
+			<-audioDone
+			require.NoError(t, err)
+
+			t.Log("verifying DTMF events")
+			var got []Event
+			lastAudioTS := uint32(math.MaxUint32)
+			lastEventTS := uint32(math.MaxUint32)
+			for i, p := range buf {
+				require.Equal(t, buf[0].SequenceNumber+uint16(i), p.SequenceNumber)
+				require.Equal(t, buf[0].SSRC, p.SSRC)
+				switch p.PayloadType {
+				case audioPT:
+					if i > 0 {
+						require.Equal(t, audioPacketDur, p.Timestamp-lastAudioTS)
+					}
+					lastAudioTS = p.Timestamp
+				case eventsPT:
+					if p.Timestamp != lastEventTS {
+						t.Logf("received new event timestamp, timestamp: %d, last event timestamp: %d", p.Timestamp, lastEventTS)
+						require.Equal(t, lastAudioTS, p.Timestamp)
+						require.True(t, p.Marker)
+						expectedDurDelay := expectedDelay[0]
+						expectedDelay = expectedDelay[1:]
+						if expectedDurDelay >= 0 {
+							expectedSampleDelay := durationToSamples(expectedDurDelay, c.audioRate)
+							sampleDelay := p.Timestamp - lastEventTS
+							t.Logf("expected delay: %v", expectedDurDelay)
+							t.Logf("expected sample delay: %d", expectedSampleDelay)
+							t.Logf("sample delay: %d", sampleDelay)
+							require.GreaterOrEqual(t, expectedSampleDelay+(2*audioPacketDur), sampleDelay)
+							require.LessOrEqual(t, expectedSampleDelay-audioPacketDur, sampleDelay)
+						}
+					} else {
+						require.Equal(t, lastEventTS, p.Timestamp)
+						require.False(t, p.Marker)
+					}
+					e, err := Decode(p.Payload)
+					require.NoError(t, err)
+					got = append(got, e)
+					lastEventTS = p.Timestamp
+				default:
+					t.Fatalf("unexpected payload type: %d", p.PayloadType)
+				}
 			}
 			require.Equal(t, exp, got)
 		})

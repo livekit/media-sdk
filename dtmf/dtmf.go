@@ -273,8 +273,12 @@ func roundTo(dt, step time.Duration) time.Duration {
 
 // Write in-band (analog) and off-band (digital) DTMF tones to audio and RTP streams respectively.
 //
+// Each event is stamped with the next frame timestamp of the audio sharing its SeqWriter, taken at
+// the start of each digit, even when telephone-event is negotiated at a different clock rate.
+// Event durations are in eventsRate units, the negotiated telephone-event clock rate.
+//
 // Digits may contain a special character 'w' which adds a 0.5 sec delay.
-func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *rtp.Stream, eventsRate int, startTs uint32, digits string) error {
+func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *rtp.Stream, eventsRate int, digits string) error {
 	const framesPerSec = int(time.Second / rtp.DefFrameDur)
 	var (
 		buf    [4]byte
@@ -297,21 +301,12 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 		remaining time.Duration
 	)
 	setDelay := func(dt time.Duration) {
-		// Tones and delays are sent as whole frames. Round durations up front,
-		// so that RTP timestamps advance exactly as much as the frames we send.
-		// Otherwise, each digit drifts behind the audio stream that shares the RTP timeline.
+		// Tones and delays are sent as whole frames, matching audio timestamps.
 		dt = roundTo(dt, step)
 		code, freq = 0xff, nil
 		remaining = dt
 		totalDur = dt
 		nextDelay = 0
-		if events != nil {
-			events.Delay(uint32(dt / (time.Second / time.Duration(eventsRate))))
-		}
-	}
-
-	if events != nil {
-		events.ResetTimestamp(startTs)
 	}
 
 	for {
@@ -339,6 +334,9 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 					remaining = roundTo(eventDur, step)
 					nextDelay = eventDur
 					totalDur = remaining
+					if events != nil {
+						events.SyncEventTimestamp()
+					}
 				}
 			}
 		}
@@ -381,8 +379,6 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 				if err = events.WritePayloadAtCurrent(buf[:n], first); err != nil {
 					return err
 				}
-				// advance the timestamp now
-				events.Delay(uint32(totalDur / (time.Second / time.Duration(eventsRate))))
 			}
 		}
 		remaining -= step
