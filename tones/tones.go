@@ -17,6 +17,7 @@ package tones
 import (
 	"context"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/livekit/media-sdk"
@@ -52,7 +53,38 @@ var (
 	ETSIDial    = []Tone{{Freq: []Hz{425}}}
 	ETSIRinging = []Tone{{Freq: []Hz{425}, Dur: time.Second, Silence: 4 * time.Second}}
 	ETSIBusy    = []Tone{{Freq: []Hz{425}, Dur: time.Second / 2, Silence: time.Second / 2}}
+
+	// USRinging is the North American (NANP) ringback, per ITU-T E.180 Suppl. 2.
+	USRinging = []Tone{{Freq: []Hz{440, 480}, Dur: 2 * time.Second, Silence: 4 * time.Second}}
+	// UKRinging is the UK double-ring ringback, per ITU-T E.180 Suppl. 2.
+	UKRinging = []Tone{
+		{Freq: []Hz{400, 450}, Dur: 400 * time.Millisecond, Silence: 200 * time.Millisecond},
+		{Freq: []Hz{400, 450}, Dur: 400 * time.Millisecond, Silence: 2 * time.Second},
+	}
+	// JPRinging is the Japanese ringback (E.180 Suppl. 2: 400 Hz × 16 Hz), without the 16 Hz modulation.
+	JPRinging = []Tone{{Freq: []Hz{400}, Dur: time.Second, Silence: 2 * time.Second}}
+	// AURinging is the Australian ringback tone B from AS/CA S002.
+	AURinging = []Tone{
+		{Freq: []Hz{400, 450}, Dur: 400 * time.Millisecond, Silence: 200 * time.Millisecond},
+		{Freq: []Hz{400, 450}, Dur: 400 * time.Millisecond, Silence: 2 * time.Second},
+	}
 )
+
+// RingingByRegion returns the ringback tone for an ISO 3166-1 alpha-2 country code ("UK" is accepted for GB).
+// Unknown codes, including EU countries, get ETSIRinging. The returned slice is shared and must not be modified.
+func RingingByRegion(code string) []Tone {
+	switch strings.ToUpper(strings.TrimSpace(code)) {
+	case "US", "CA":
+		return USRinging
+	case "GB", "UK":
+		return UKRinging
+	case "JP":
+		return JPRinging
+	case "AU":
+		return AURinging
+	}
+	return ETSIRinging
+}
 
 // Play specified audio tones in a loop until the context is cancelled.
 func Play(ctx context.Context, audio media.Writer[media.PCM16Sample], vol int16, tones []Tone) error {
