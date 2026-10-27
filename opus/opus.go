@@ -76,6 +76,8 @@ type EncodeOptions struct {
 	FEC bool
 	// PacketLossPercent is the expected packet loss 0-100, used to tune FEC.
 	PacketLossPercent int
+	// MaxPlaybackRate caps audio bandwidth to what the receiver plays back, in Hz (RFC 7587). 0 = no cap.
+	MaxPlaybackRate int
 }
 
 func Encode(w Writer, channels int, logger logger.Logger) (media.PCM16Writer, error) {
@@ -107,12 +109,33 @@ func EncodeWith(w Writer, channels int, opts EncodeOptions, logger logger.Logger
 			}
 		}
 	}
+	if opts.MaxPlaybackRate > 0 {
+		if err = enc.SetMaxBandwidth(maxBandwidth(opts.MaxPlaybackRate)); err != nil {
+			return nil, fmt.Errorf("opus set max bandwidth: %w", err)
+		}
+	}
 	return &encoder{
 		w:      w,
 		enc:    enc,
 		buf:    make([]byte, w.SampleRate()/rtp.DefFramesPerSec*channels),
 		logger: logger,
 	}, nil
+}
+
+// The narrowest Opus bandwidth that still carries audio sampled at playbackRate (RFC 6716 Table 1).
+func maxBandwidth(playbackRate int) opus.Bandwidth {
+	switch {
+	case playbackRate <= 8000:
+		return opus.Narrowband
+	case playbackRate <= 12000:
+		return opus.Mediumband
+	case playbackRate <= 16000:
+		return opus.Wideband
+	case playbackRate <= 24000:
+		return opus.SuperWideband
+	default:
+		return opus.Fullband
+	}
 }
 
 type decoder struct {
