@@ -335,14 +335,14 @@ const (
 	srcB = 'B'
 )
 
-func newLineTest() *lineTest {
+func newLineTest(opts ...Option) *lineTest {
 	l := &lineTest{t0: time.Now().Add(-time.Hour), got: map[uint32]int{}}
 	l.b = NewBuffer(&testDepacketizer{}, testBufferLatency, func(p []ExtPacket) {
 		for _, x := range p {
 			l.got[x.Timestamp]++
 			l.seqs = append(l.seqs, x.SequenceNumber)
 		}
-	}, WithSequenceRestartDetection())
+	}, append(opts, WithSequenceRestartDetection())...)
 	return l
 }
 
@@ -420,6 +420,21 @@ func TestSequenceRestartFarStray(t *testing.T) {
 		SamplesPopped:  100,
 		PacketsStray:   1,
 	})
+}
+
+// Each stray must be reported to the stats handler. A call can drop thousands
+// of strays with no switch, reorder or restart to carry the count.
+func TestSequenceStrayNotified(t *testing.T) {
+	var last BufferStats
+	l := newLineTest(WithStatsHandler(func(st *BufferStats) { last = *st }))
+	defer l.b.Close()
+
+	l.run(21245, 21294)
+	l.push(slot(l.n)-10*time.Millisecond, 12676, srcA)
+	l.run(21295, 21344)
+
+	require.Equal(t, uint64(1), last.PacketsStray)
+	require.Equal(t, uint64(1), last.PacketsDropped)
 }
 
 // Late packets close behind the line are expired as usual, not a new line.
