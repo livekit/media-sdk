@@ -303,6 +303,8 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 			if b.onPacketLoss != nil {
 				b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
 			}
+			// onPacketLoss does not carry PacketsStray
+			b.notifyStats()
 		}
 		return
 	}
