@@ -78,3 +78,35 @@ func TestAMRWBAnswerFmtpWhitespace(t *testing.T) {
 		})
 	}
 }
+
+func TestAMRWBAnswerOctetAligned(t *testing.T) {
+	codecs := media.NewCodecSet()
+	codecs.SetEnabled(amrwb.SDPNameOnly, true)
+	data := strings.Join([]string{
+		"v=0", "o=- 1 1 IN IP4 192.0.2.1", "s=-", "c=IN IP4 192.0.2.1", "t=0 0",
+		"m=audio 5004 RTP/AVP 102", "a=rtpmap:102 AMR-WB/16000",
+		"a=fmtp:102 octet-align=1; mode-set=0,1,2", "a=ptime:20", "a=sendrecv", "",
+	}, "\r\n")
+	offer, err := ParseOfferWith(codecs, []byte(data))
+	require.NoError(t, err)
+	answer, config, err := offer.Answer(netip.MustParseAddr("192.0.2.2"), 5006, EncryptionNone)
+	require.NoError(t, err)
+	answerData, err := answer.SDP.Marshal()
+	require.NoError(t, err)
+	require.Contains(t, string(answerData), "a=fmtp:102 octet-align=1;mode-set=0,1,2\r\n")
+
+	_, create, ok := config.Audio.Codec.Supports(config.Audio.Info.CodecConfig)
+	require.True(t, ok)
+	codec := create().(media.AudioCodec)
+	capture := new(amrPacketCapture)
+	enc := codec.EncodeBytes(capture)
+	defer enc.Close()
+	require.NoError(t, enc.WriteSample(make(media.PCM16Sample, 320)))
+	require.Len(t, capture.packets, 1)
+	packet := capture.packets[0]
+	require.GreaterOrEqual(t, len(packet), 2)
+	// Octet-aligned payload header: CMR(4) R(4), then TOC: F(1) FT(4) Q(1) P(2).
+	require.Equal(t, byte(0xf0), packet[0], "unexpected CMR byte, got packet %x", packet)
+	frameType := int(packet[1]>>3) & 0xf
+	require.Equal(t, 2, frameType, "encoded frame type must be within the offered mode-set, got packet %x", packet)
+}
