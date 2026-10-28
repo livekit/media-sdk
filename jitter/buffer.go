@@ -276,6 +276,18 @@ func (b *Buffer) reordered() {
 	b.notifyStats()
 }
 
+// duplicate drops a packet whose sequence number is already buffered.
+// Caller must hold b.mu.
+func (b *Buffer) duplicate(pkt *rtp.Packet) {
+	if pkt.Padding {
+		return
+	}
+	b.stats.PacketsDropped++
+	if b.onPacketLoss != nil {
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+	}
+}
+
 // push adds a packet to the buffer
 func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	b.stats.PacketsPushed++
@@ -320,6 +332,14 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		return
 	}
 
+	// A duplicate of a packet still waiting here, for example behind a gap,
+	// would otherwise be played twice and counted as ~65535 lost.
+	if b.head != nil && (pkt.SequenceNumber == b.head.extPacket.SequenceNumber ||
+		pkt.SequenceNumber == b.tail.extPacket.SequenceNumber) {
+		b.duplicate(pkt)
+		return
+	}
+
 	p := b.newPacket(pkt, receivedAt)
 
 	discont := !b.initialized || !withinRange(pkt.SequenceNumber, b.prevSN)
@@ -353,11 +373,16 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 	case withinTailRange:
 		// insert, search from tail
-		b.reordered()
 		for c := b.tail.prev; c != nil; c = c.prev {
+			if pkt.SequenceNumber == c.extPacket.SequenceNumber {
+				b.free(p)
+				b.duplicate(pkt)
+				return
+			}
 			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
 			if !before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {
 				// insert after c
+				b.reordered()
 				p.discont = discont && p.start
 				p.prev = c
 				p.next = c.next
@@ -369,11 +394,16 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 	case withinHeadRange:
 		// insert, search from head
-		b.reordered()
 		for c := b.head.next; c != nil; c = c.next {
+			if pkt.SequenceNumber == c.extPacket.SequenceNumber {
+				b.free(p)
+				b.duplicate(pkt)
+				return
+			}
 			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
 			if before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {
 				// insert before c
+				b.reordered()
 				p.prev = c.prev
 				p.next = c
 				c.prev.next = p
