@@ -146,6 +146,7 @@ func WithWallclockAdjusted(adjusted bool) SeqWriterOpt {
 type SeqWriter struct {
 	maxTS             atomic.Uint32
 	maxTime           atomic.Value // time.Time
+	mainClockRate     atomic.Uint32
 	mu                sync.Mutex
 	w                 Writer
 	h                 Header
@@ -248,8 +249,12 @@ func (s *Stream) WriteRaw(data []byte) error {
 
 // Return the number of samples, rounded to full frames, that have passed since the last packet by wall-clock time.
 func (s *Stream) AdjustWallclockDelta() {
+	dur := s.s.mainClockRate.Load()
+	if dur == 0 {
+		dur = s.packetDur
+	}
 	framesSince := s.s.wallclockFrameDelta()
-	s.ev.Timestamp += framesSince * s.packetDur
+	s.ev.Timestamp += framesSince * dur
 	for {
 		cur := s.s.maxTS.Load()
 		if cur >= s.ev.Timestamp {
@@ -267,6 +272,7 @@ func (s *Stream) writePayload(preserveLastTS bool, data []byte, marker bool) err
 	s.ev.Payload = data
 	s.ev.Marker = marker
 	if !preserveLastTS {
+		s.s.mainClockRate.Store(s.packetDur)
 		s.AdjustWallclockDelta()
 		s.ev.Timestamp = s.s.CurTS(s.ev.Timestamp, s.packetDur)
 	}
