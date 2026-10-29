@@ -72,6 +72,7 @@ type BufferStats struct {
 	PacketsReordered uint64 // packets put back in sequence
 	SequenceRestarts uint64 // times the buffer re-synced onto another sequence line, same SSRC
 	PacketsStray     uint64 // packets dropped for belonging to a sequence line that is not playing (also in PacketsDropped)
+	PacketsDuplicate uint64 // packets discarded because the same sequence number is already buffered (not in PacketsDropped)
 }
 
 type PacketFunc func(packets []ExtPacket)
@@ -226,6 +227,7 @@ func (b *Buffer) statsLocked() *BufferStats {
 		PacketsReordered: b.stats.PacketsReordered,
 		SequenceRestarts: b.stats.SequenceRestarts,
 		PacketsStray:     b.stats.PacketsStray,
+		PacketsDuplicate: b.stats.PacketsDuplicate,
 	}
 }
 
@@ -276,16 +278,16 @@ func (b *Buffer) reordered() {
 	b.notifyStats()
 }
 
-// duplicate drops a packet whose sequence number is already buffered.
+// duplicate discards a packet whose sequence number is already buffered.
+// Nothing is lost, so it is not a drop and does not call onPacketLoss: on
+// video that handler requests a keyframe, and a NACK retransmission must not.
 // Caller must hold b.mu.
 func (b *Buffer) duplicate(pkt *rtp.Packet) {
 	if pkt.Padding {
 		return
 	}
-	b.stats.PacketsDropped++
-	if b.onPacketLoss != nil {
-		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
-	}
+	b.stats.PacketsDuplicate++
+	b.notifyStats()
 }
 
 // push adds a packet to the buffer

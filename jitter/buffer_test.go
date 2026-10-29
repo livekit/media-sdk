@@ -259,10 +259,13 @@ func TestFlushDropsIncomplete(t *testing.T) {
 }
 
 // A duplicate that arrives while its original waits behind a gap must be
-// dropped. It used to be played after the original and counted as 65535 lost.
+// discarded. It used to be played after the original and counted as 65535
+// lost. Nothing is lost, so it must not reach the packet-loss handler.
 func TestDuplicateBehindGap(t *testing.T) {
 	out := make(chan []ExtPacket, 10)
-	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	losses := 0
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out),
+		WithPacketLossHandler(func(_, _ uint64) { losses++ }))
 	s := newTestStream()
 
 	b.Push(s.gen(true, true))
@@ -279,6 +282,7 @@ func TestDuplicateBehindGap(t *testing.T) {
 	b.Push(s.gen(true, true))
 	b.Push(p3) // duplicate in the middle
 	checkSample(t, out, 0)
+	require.Zero(t, losses, "a duplicate is not a loss")
 
 	b.Flush()
 	for range 3 {
@@ -287,11 +291,34 @@ func TestDuplicateBehindGap(t *testing.T) {
 	checkSample(t, out, 0)
 
 	checkStats(t, b, &BufferStats{
-		PacketsPushed:  7,
-		PacketsLost:    1,
-		PacketsDropped: 3,
-		PacketsPopped:  4,
-		SamplesPopped:  4,
+		PacketsPushed:    7,
+		PacketsLost:      1,
+		PacketsPopped:    4,
+		SamplesPopped:    4,
+		PacketsDuplicate: 3,
+	})
+}
+
+// A duplicate inside a multi-packet frame, such as a NACK retransmission plus
+// the late original on video, must not break the frame. Without the check the
+// repeated sequence number fails isComplete and the whole frame is dropped.
+func TestDuplicateInFrame(t *testing.T) {
+	out := make(chan []ExtPacket, 10)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := newTestStream()
+
+	b.Push(s.gen(true, false))
+	mid := s.gen(false, false)
+	b.Push(mid)
+	b.Push(mid) // duplicate inside the frame
+	b.Push(s.gen(false, true))
+	checkSample(t, out, 3)
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:    4,
+		PacketsPopped:    3,
+		SamplesPopped:    1,
+		PacketsDuplicate: 1,
 	})
 }
 
@@ -737,6 +764,7 @@ func checkStats(t *testing.T, b *Buffer, expected *BufferStats) {
 	require.Equal(t, expected.PacketsReordered, stats.PacketsReordered)
 	require.Equal(t, expected.SequenceRestarts, stats.SequenceRestarts)
 	require.Equal(t, expected.PacketsStray, stats.PacketsStray)
+	require.Equal(t, expected.PacketsDuplicate, stats.PacketsDuplicate)
 }
 
 type stream struct {
