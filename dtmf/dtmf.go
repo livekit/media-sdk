@@ -363,9 +363,8 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 			if err != nil {
 				return err
 			}
-			if first { // Must grab TS from audio stream
-				events.SyncEventTimestamp()
-				events.AdjustWallclockDelta()
+			if first {
+				events.SyncTimestamp()
 			}
 			err = events.WritePayloadAtCurrent(buf[:n], first)
 			if err != nil {

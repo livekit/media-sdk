@@ -148,14 +148,14 @@ func TestDTMFDelay(t *testing.T) {
 	durationToSamples := func(dur time.Duration, rate int) uint32 {
 		return uint32(time.Duration(rate) * dur / time.Second)
 	}
-	testSingleCase := func(audioRate int, eventsRate int, audioEnabled bool, wallclockAdjusted bool) {
-		t.Run(fmt.Sprintf("audio-%d-events-%d-audio-%t-wallclock-%t", audioRate, eventsRate, audioEnabled, wallclockAdjusted), func(t *testing.T) {
+	testSingleCase := func(audioRate int, eventsRate int, audioEnabled bool) {
+		t.Run(fmt.Sprintf("audio-%d-events-%d-audio-%t", audioRate, eventsRate, audioEnabled), func(t *testing.T) {
 			t.Parallel()
 			const audioPT, eventsPT = 96, 101
 			var buf rtp.Buffer
-			sw := rtp.NewSeqWriter(&buf, rtp.WithWallclockAdjusted(wallclockAdjusted))
+			sw := rtp.NewSeqWriter(&buf, audioRate)
 			audio := sw.NewStream(audioPT, audioRate)
-			events := sw.NewStream(eventsPT, eventsRate)
+			events := sw.NewManualStream(eventsPT)
 
 			t.Log("starting audio stream")
 			ctx, cancel := context.WithCancel(t.Context())
@@ -233,6 +233,7 @@ func TestDTMFDelay(t *testing.T) {
 			lastAudioTS := uint32(math.MaxUint32)
 			lastEventTS := uint32(math.MaxUint32)
 			for i, p := range buf {
+				t.Logf("packet: seq=%d, timestamp=%d, type=%d", p.SequenceNumber, p.Timestamp, p.PayloadType)
 				require.Equal(t, buf[0].SequenceNumber+uint16(i), p.SequenceNumber)
 				require.Equal(t, buf[0].SSRC, p.SSRC)
 				switch p.PayloadType {
@@ -245,9 +246,12 @@ func TestDTMFDelay(t *testing.T) {
 					e, err := Decode(p.Payload)
 					require.NoError(t, err)
 					if p.Timestamp != lastEventTS {
-						t.Logf("received new event timestamp, timestamp: %d, last event timestamp: %d, last audio timestamp: %d", p.Timestamp, lastEventTS, lastAudioTS)
+						t.Logf("received new event timestamp, timestamp: %d, last audio timestamp: %d", p.Timestamp, lastAudioTS)
 						if audioEnabled {
-							require.Equal(t, lastAudioTS, p.Timestamp)
+							sampleDelay := p.Timestamp - lastAudioTS
+							// Audio is subject to timing jitter, so while we expect DTMF to be at +0 or +1 framess
+							require.GreaterOrEqual(t, sampleDelay, uint32(0))
+							require.LessOrEqual(t, sampleDelay, audioPacketDur)
 						}
 						require.True(t, p.Marker)
 						expectedDurDelay := expectedDelay[0]
@@ -277,10 +281,8 @@ func TestDTMFDelay(t *testing.T) {
 		})
 	}
 	for _, c := range rates {
-		testSingleCase(c.audioRate, c.eventsRate, true, false)
-		testSingleCase(c.audioRate, c.eventsRate, false, true)
-		testSingleCase(c.audioRate, c.eventsRate, true, true)
-		// Must have wallclock adjusted to be able to test with audio disabled
+		testSingleCase(c.audioRate, c.eventsRate, true)
+		testSingleCase(c.audioRate, c.eventsRate, false)
 	}
 }
 
@@ -288,9 +290,9 @@ func TestDTMFWithoutAudio(t *testing.T) {
 	const audioRate, eventsRate = 48000, 8000
 	const audioPT, eventsPT = 96, 101
 	var buf rtp.Buffer
-	sw := rtp.NewSeqWriter(&buf, rtp.WithWallclockAdjusted(true))
+	sw := rtp.NewSeqWriter(&buf, audioRate)
 	audio := sw.NewStream(audioPT, audioRate)
-	events := sw.NewStream(eventsPT, eventsRate)
+	events := sw.NewManualStream(eventsPT)
 
 	// Audio stops before the digits are sent, e.g. muted during DTMF.
 	for range 5 {
