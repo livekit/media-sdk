@@ -17,7 +17,8 @@ package dtmf
 import (
 	"context"
 	"encoding/hex"
-	"strconv"
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -131,87 +132,188 @@ func TestDecodeRTPWithEnd(t *testing.T) {
 }
 
 func TestDTMFDelay(t *testing.T) {
-	const startTime = 1242
+	rates := []struct {
+		audioRate  int
+		eventsRate int
+	}{
+		{8000, 8000},
+		{8000, 16000},
+		{16000, 8000},
+		{16000, 16000},
+	}
 
-	for _, eventsRate := range []int{
-		8000, 16000,
-	} {
-		t.Run(strconv.Itoa(eventsRate), func(t *testing.T) {
+	frameSamples := func(rate int, frameDur time.Duration) uint32 {
+		return uint32(time.Duration(rate) * frameDur / time.Second)
+	}
+	durationToSamples := func(dur time.Duration, rate int) uint32 {
+		return uint32(time.Duration(rate) * dur / time.Second)
+	}
+	testSingleCase := func(audioRate int, eventsRate int, audioEnabled bool) {
+		t.Run(fmt.Sprintf("audio-%d-events-%d-audio-%t", audioRate, eventsRate, audioEnabled), func(t *testing.T) {
+			t.Parallel()
+			const audioPT, eventsPT = 96, 101
 			var buf rtp.Buffer
-			w := rtp.NewSeqWriter(&buf).NewStream(101, eventsRate)
-			err := Write(context.Background(), nil, w, eventsRate, startTime, "1w23")
-			require.NoError(t, err)
+			sw := rtp.NewSeqWriter(&buf, audioRate)
+			audio := sw.NewStream(audioPT, audioRate)
+			events := sw.NewManualStream(eventsPT)
 
-			type packet struct {
-				SequenceNumber uint16
-				Timestamp      uint32
-				Marker         bool
-				Event
+			t.Log("starting audio stream")
+			ctx, cancel := context.WithCancel(t.Context())
+			if !audioEnabled {
+				ctx, _ = context.WithTimeout(ctx, 3*rtp.DefFrameDur)
 			}
-			var (
-				exp []packet
-				seq uint16
-				ts  uint32
-			)
-			packetDur := uint32(eventsRate / int(time.Second/rtp.DefFrameDur))
+			audioDone := make(chan struct{})
+			go func() {
+				defer close(audioDone)
+				defer t.Log("stopping audio stream")
+				ticker := time.NewTicker(rtp.DefFrameDur)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						_ = audio.WritePayload([]byte{0}, false)
+					}
+				}
+			}()
 
-			ts = startTime
+			var exp []Event
 
-			expectDigit := func(code byte, digit byte) {
-				start := ts
+			packetDur := frameSamples(eventsRate, rtp.DefFrameDur)
+			audioPacketDur := frameSamples(audioRate, rtp.DefFrameDur)
+
+			expectDigit := func(code byte, digit byte) []Event {
+				var generated []Event
 				const n = 13
 				for i := 0; i < n-1; i++ {
-					exp = append(exp, packet{
-						SequenceNumber: seq,
-						Timestamp:      start, // should be the same for all events
-						Marker:         i == 0,
-						Event: Event{
-							Code:   code,
-							Digit:  digit,
-							Volume: eventVolume,
-							Dur:    uint16(i+1) * uint16(packetDur),
-							End:    false,
-						},
+					generated = append(generated, Event{
+						Code:   code,
+						Digit:  digit,
+						Volume: eventVolume,
+						Dur:    uint16(i+1) * uint16(packetDur),
+						End:    false,
 					})
-					ts += packetDur
-					seq++
 				}
 				// end event must be sent 3 times with the same duration
 				for i := 0; i < 3; i++ {
-					exp = append(exp, packet{
-						SequenceNumber: seq,
-						Timestamp:      start, // should be the same for all events
-						Marker:         false,
-						Event: Event{
-							Code:   code,
-							Digit:  digit,
-							Volume: eventVolume,
-							Dur:    uint16(n) * uint16(packetDur),
-							End:    true,
-						},
+					generated = append(generated, Event{
+						Code:   code,
+						Digit:  digit,
+						Volume: eventVolume,
+						Dur:    uint16(n) * uint16(packetDur),
+						End:    true,
 					})
-					seq++
 				}
-				ts += packetDur
-				// delay between digits, same number of frames as the tone
-				ts += n * packetDur
+				return generated
 			}
-			expectDigit(1, '1')
-			ts += uint32(eventsRate) / 2 // 500ms delay
-			expectDigit(2, '2')
-			expectDigit(3, '3')
-			var got []packet
-			for _, p := range buf {
-				e, err := Decode(p.Payload)
-				require.NoError(t, err)
-				got = append(got, packet{
-					SequenceNumber: p.SequenceNumber,
-					Timestamp:      p.Timestamp,
-					Marker:         p.Marker,
-					Event:          e,
-				})
+
+			exp = append(exp, expectDigit(1, '1')...)
+			exp = append(exp, expectDigit(2, '2')...)
+			exp = append(exp, expectDigit(3, '3')...)
+			exp = append(exp, expectDigit(4, '4')...)
+			delayBetweenDigits := eventDur
+			expectedDelay := []time.Duration{
+				-1, // Don't care how long until the first event
+				eventDur + delayBetweenDigits,
+				eventDur + delayBetweenDigits + delayDur,
+				eventDur + delayBetweenDigits,
+			}
+
+			time.Sleep(5 * rtp.DefFrameDur)
+
+			t.Log("sending DTMF events")
+			err := Write(t.Context(), nil, events, eventsRate, "12w34")
+			cancel()
+			<-audioDone
+			require.NoError(t, err)
+
+			t.Log("verifying DTMF events")
+			var got []Event
+			lastAudioTS := uint32(math.MaxUint32)
+			lastEventTS := uint32(math.MaxUint32)
+			for i, p := range buf {
+				t.Logf("packet: seq=%d, timestamp=%d, type=%d", p.SequenceNumber, p.Timestamp, p.PayloadType)
+				require.Equal(t, buf[0].SequenceNumber+uint16(i), p.SequenceNumber)
+				require.Equal(t, buf[0].SSRC, p.SSRC)
+				switch p.PayloadType {
+				case audioPT:
+					if i > 0 {
+						require.Equal(t, audioPacketDur, p.Timestamp-lastAudioTS)
+					}
+					lastAudioTS = p.Timestamp
+				case eventsPT:
+					e, err := Decode(p.Payload)
+					require.NoError(t, err)
+					if p.Timestamp != lastEventTS {
+						t.Logf("received new event timestamp, timestamp: %d, last audio timestamp: %d", p.Timestamp, lastAudioTS)
+						if audioEnabled {
+							sampleDelay := p.Timestamp - lastAudioTS
+							// Audio is subject to timing jitter, so while we expect DTMF to be at +0 or +1 framess
+							require.GreaterOrEqual(t, sampleDelay, uint32(0))
+							require.LessOrEqual(t, sampleDelay, audioPacketDur)
+						}
+						require.True(t, p.Marker)
+						expectedDurDelay := expectedDelay[0]
+						expectedDelay = expectedDelay[1:]
+						if expectedDurDelay >= 0 {
+							expectedSampleDelay := durationToSamples(expectedDurDelay, audioRate)
+							sampleDelay := p.Timestamp - lastEventTS
+							t.Logf("expected delay: %v", expectedDurDelay)
+							t.Logf("expected sample delay: %d", expectedSampleDelay)
+							t.Logf("sample delay: %d", sampleDelay)
+							require.NotEqual(t, got[len(got)-1].Digit, e.Digit)
+							require.GreaterOrEqual(t, expectedSampleDelay+(2*audioPacketDur), sampleDelay)
+							require.LessOrEqual(t, expectedSampleDelay-audioPacketDur, sampleDelay)
+						}
+					} else {
+						require.Equal(t, lastEventTS, p.Timestamp)
+						require.Equal(t, got[len(got)-1].Digit, e.Digit)
+						require.False(t, p.Marker)
+					}
+					got = append(got, e)
+					lastEventTS = p.Timestamp
+				default:
+					t.Fatalf("unexpected payload type: %d", p.PayloadType)
+				}
 			}
 			require.Equal(t, exp, got)
 		})
 	}
+	for _, c := range rates {
+		testSingleCase(c.audioRate, c.eventsRate, true)
+		testSingleCase(c.audioRate, c.eventsRate, false)
+	}
+}
+
+func TestDTMFWithoutAudio(t *testing.T) {
+	const audioRate, eventsRate = 48000, 8000
+	const audioPT, eventsPT = 96, 101
+	var buf rtp.Buffer
+	sw := rtp.NewSeqWriter(&buf, audioRate)
+	audio := sw.NewStream(audioPT, audioRate)
+	events := sw.NewManualStream(eventsPT)
+
+	// Audio stops before the digits are sent, e.g. muted during DTMF.
+	for range 5 {
+		require.NoError(t, audio.WritePayload([]byte{0}, false))
+		time.Sleep(rtp.DefFrameDur)
+	}
+	lastAudioTS := buf[len(buf)-1].Timestamp
+
+	require.NoError(t, Write(t.Context(), nil, events, eventsRate, "12"))
+
+	var digitTS []uint32
+	for _, p := range buf {
+		if p.PayloadType == eventsPT && p.Marker {
+			digitTS = append(digitTS, p.Timestamp)
+		}
+	}
+	require.Len(t, digitTS, 2)
+	require.GreaterOrEqual(t, digitTS[0], lastAudioTS)
+
+	// Tone and the pause after it, both rounded to whole frames.
+	frame := uint32(audioRate / rtp.DefFramesPerSec)
+	gap := uint32(audioRate) * uint32(2*roundTo(eventDur, rtp.DefFrameDur)/time.Millisecond) / 1000
+	require.InDelta(t, gap, digitTS[1]-digitTS[0], float64(frame))
 }
