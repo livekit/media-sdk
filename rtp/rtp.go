@@ -169,7 +169,7 @@ func (s *SeqWriter) String() string {
 }
 
 // TS returns the latest timestamp written.
-func (s *SeqWriter) TS() uint32 {
+func (s *SeqWriter) GetMaxTS() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maxTS
@@ -302,8 +302,7 @@ func (s *Stream) WritePayloadAtCurrent(data []byte, marker bool) error {
 	return s.s.WriteEvent(&Event{Type: s.typ, Timestamp: s.ts, Payload: data, Marker: marker})
 }
 
-// SyncTimestamp sets the timestamp of a manual stream to the latest packet written,
-// or to the wall clock if that fell behind.
+// SyncTimestamp sets the timestamp of a manual stream to a projected TS based on wallclock anchor.
 func (s *Stream) SyncTimestamp() error {
 	if !s.manual {
 		return errors.New("rtp: SyncTimestamp on the automatic stream")

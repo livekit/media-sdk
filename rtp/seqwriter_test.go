@@ -27,7 +27,7 @@ const (
 	frame             = DefFrameDur
 )
 
-type fakeClock struct {
+type fakeClock struct { // TODO: Ideally solved with testing/synctest
 	t time.Time
 }
 
