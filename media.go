@@ -68,6 +68,21 @@ func NopCloser[T any](w Writer[T]) WriteCloser[T] {
 	return &writeCloser[T]{w}
 }
 
+// funcWriteCloser is a WriteCloser that calls fn on every sample.
+type funcWriteCloser[T any] struct {
+	rate int
+	fn   func(T) error
+}
+
+func NewFuncWriteCloser[T any](rate int, fn func(T) error) WriteCloser[T] {
+	return &funcWriteCloser[T]{rate: rate, fn: fn}
+}
+
+func (w *funcWriteCloser[T]) String() string             { return fmt.Sprintf("FuncWriteCloser(%d)", w.rate) }
+func (w *funcWriteCloser[T]) SampleRate() int            { return w.rate }
+func (w *funcWriteCloser[T]) Close() error               { return nil }
+func (w *funcWriteCloser[T]) WriteSample(sample T) error { return w.fn(sample) }
+
 func NewSwitchWriter(sampleRate int) *SwitchWriter {
 	// This protects from a case when sample rate is not initialized,
 	// but still allows passing -1 to delay initialization.
