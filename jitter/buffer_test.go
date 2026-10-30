@@ -258,6 +258,70 @@ func TestFlushDropsIncomplete(t *testing.T) {
 	})
 }
 
+// A duplicate that arrives while its original waits behind a gap must be
+// discarded. It used to be played after the original and counted as 65535
+// lost. Nothing is lost, so it must not reach the packet-loss handler.
+func TestDuplicateBehindGap(t *testing.T) {
+	out := make(chan []ExtPacket, 10)
+	losses := 0
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out),
+		WithPacketLossHandler(func(_, _ uint64) { losses++ }))
+	s := newTestStream()
+
+	b.Push(s.gen(true, true))
+	checkSample(t, out, 1)
+
+	_ = s.gen(true, true) // lost: the next packets wait behind the gap
+
+	p2 := s.gen(true, true)
+	b.Push(p2)
+	b.Push(p2) // duplicate of the tail
+	p3 := s.gen(true, true)
+	b.Push(p3)
+	b.Push(p2) // duplicate of the head
+	b.Push(s.gen(true, true))
+	b.Push(p3) // duplicate in the middle
+	checkSample(t, out, 0)
+	require.Zero(t, losses, "a duplicate is not a loss")
+
+	b.Flush()
+	for range 3 {
+		checkSample(t, out, 1)
+	}
+	checkSample(t, out, 0)
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:    7,
+		PacketsLost:      1,
+		PacketsPopped:    4,
+		SamplesPopped:    4,
+		PacketsDuplicate: 3,
+	})
+}
+
+// A duplicate inside a multi-packet frame, such as a NACK retransmission plus
+// the late original on video, must not break the frame. Without the check the
+// repeated sequence number fails isComplete and the whole frame is dropped.
+func TestDuplicateInFrame(t *testing.T) {
+	out := make(chan []ExtPacket, 10)
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out))
+	s := newTestStream()
+
+	b.Push(s.gen(true, false))
+	mid := s.gen(false, false)
+	b.Push(mid)
+	b.Push(mid) // duplicate inside the frame
+	b.Push(s.gen(false, true))
+	checkSample(t, out, 3)
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:    4,
+		PacketsPopped:    3,
+		SamplesPopped:    1,
+		PacketsDuplicate: 1,
+	})
+}
+
 func TestFlushReportsLoss(t *testing.T) {
 	out := make(chan []ExtPacket, 10)
 	losses := 0
@@ -362,8 +426,8 @@ func (l *lineTest) run(first, last int) {
 
 func slot(i int) time.Duration { return time.Duration(i) * 20 * time.Millisecond }
 
-// A media file looping back to sequence 0 on the same SSRC
-// (SCL_mwhYqDjdFj2w). The old line stops, so the new one takes over once it
+// A media file looping back to sequence 0 on the same SSRC.
+// The old line stops, so the new one takes over once it
 // has been quiet for lineQuiet: two packets per restart.
 func TestSequenceRestart(t *testing.T) {
 	l := newLineTest()
@@ -540,7 +604,7 @@ func TestTwoLines(t *testing.T) {
 		a, b     int // packets delivered
 		restarts uint64
 	}{
-		// B2BUA interleaving a sparse second source 392 ahead (SCL_n6cVRuyyFN2M)
+		// B2BUA interleaving a sparse second source 392 ahead
 		{"sparse ahead", 1500, 4 * time.Millisecond, func(i int) (int, int) {
 			return or(i < 500 || i%9 != 4, 1000+i), or(i >= 500 && sparse(i), 1392+i)
 		}, 1389, 0, 0},
@@ -569,7 +633,7 @@ func TestTwoLines(t *testing.T) {
 			}
 			return a, or(i >= 500 && sparse(i), 1392+i)
 		}, 1367, 0, 0},
-		// two full-rate lines for the whole call (SCL_sskecEKAj9eR): a loss
+		// two full-rate lines for the whole call: a loss
 		// burst on A does not hand over the call, a 1s outage does
 		{"parallel, A loses 120ms", 600, 10 * time.Millisecond, func(i int) (int, int) {
 			return or(!pause(i, 200, 6), 1630+i), 1000 + i
@@ -700,6 +764,7 @@ func checkStats(t *testing.T, b *Buffer, expected *BufferStats) {
 	require.Equal(t, expected.PacketsReordered, stats.PacketsReordered)
 	require.Equal(t, expected.SequenceRestarts, stats.SequenceRestarts)
 	require.Equal(t, expected.PacketsStray, stats.PacketsStray)
+	require.Equal(t, expected.PacketsDuplicate, stats.PacketsDuplicate)
 }
 
 type stream struct {

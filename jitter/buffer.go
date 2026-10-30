@@ -72,6 +72,7 @@ type BufferStats struct {
 	PacketsReordered uint64 // packets put back in sequence
 	SequenceRestarts uint64 // times the buffer re-synced onto another sequence line, same SSRC
 	PacketsStray     uint64 // packets dropped for belonging to a sequence line that is not playing (also in PacketsDropped)
+	PacketsDuplicate uint64 // packets discarded because the same sequence number is already buffered (not in PacketsDropped)
 }
 
 type PacketFunc func(packets []ExtPacket)
@@ -226,6 +227,7 @@ func (b *Buffer) statsLocked() *BufferStats {
 		PacketsReordered: b.stats.PacketsReordered,
 		SequenceRestarts: b.stats.SequenceRestarts,
 		PacketsStray:     b.stats.PacketsStray,
+		PacketsDuplicate: b.stats.PacketsDuplicate,
 	}
 }
 
@@ -276,6 +278,18 @@ func (b *Buffer) reordered() {
 	b.notifyStats()
 }
 
+// duplicate discards a packet whose sequence number is already buffered.
+// Nothing is lost, so it is not a drop and does not call onPacketLoss: on
+// video that handler requests a keyframe, and a NACK retransmission must not.
+// Caller must hold b.mu.
+func (b *Buffer) duplicate(pkt *rtp.Packet) {
+	if pkt.Padding {
+		return
+	}
+	b.stats.PacketsDuplicate++
+	b.notifyStats()
+}
+
 // push adds a packet to the buffer
 func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 	b.stats.PacketsPushed++
@@ -320,6 +334,14 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 		return
 	}
 
+	// A duplicate of a packet still waiting here, for example behind a gap,
+	// would otherwise be played twice and counted as ~65535 lost.
+	if b.head != nil && (pkt.SequenceNumber == b.head.extPacket.SequenceNumber ||
+		pkt.SequenceNumber == b.tail.extPacket.SequenceNumber) {
+		b.duplicate(pkt)
+		return
+	}
+
 	p := b.newPacket(pkt, receivedAt)
 
 	discont := !b.initialized || !withinRange(pkt.SequenceNumber, b.prevSN)
@@ -353,11 +375,16 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 	case withinTailRange:
 		// insert, search from tail
-		b.reordered()
 		for c := b.tail.prev; c != nil; c = c.prev {
+			if pkt.SequenceNumber == c.extPacket.SequenceNumber {
+				b.free(p)
+				b.duplicate(pkt)
+				return
+			}
 			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
 			if !before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {
 				// insert after c
+				b.reordered()
 				p.discont = discont && p.start
 				p.prev = c
 				p.next = c.next
@@ -369,11 +396,16 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 
 	case withinHeadRange:
 		// insert, search from head
-		b.reordered()
 		for c := b.head.next; c != nil; c = c.next {
+			if pkt.SequenceNumber == c.extPacket.SequenceNumber {
+				b.free(p)
+				b.duplicate(pkt)
+				return
+			}
 			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
 			if before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {
 				// insert before c
+				b.reordered()
 				p.prev = c.prev
 				p.next = c
 				c.prev.next = p
