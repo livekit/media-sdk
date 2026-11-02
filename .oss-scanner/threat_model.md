@@ -43,8 +43,7 @@ and through `gopkg.in/hraban/opus.v2`; `amrwb/` decodes through
 `resample_soxr.go` calls libsoxr when cgo is enabled. Pointers, lengths, and
 channel counts derived from network packets cross into C here, so Go's memory
 safety does not protect these calls. Report bugs in how this library sizes
-buffers or passes untrusted data to C here. Report bugs inside libopus, libsoxr,
-or the bundled AMR-WB C upstream, unless this library's inputs trigger them.
+buffers or passes untrusted data to C here.
 
 LiveKit server (`livekit/livekit`) is enrolled separately, and the protocol
 library (`livekit/protocol`) has its own threat model.
