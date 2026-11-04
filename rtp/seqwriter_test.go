@@ -125,6 +125,146 @@ func TestSeqWriterPackets(t *testing.T) {
 	}
 }
 
+// DTMF given at call creation is sent right after the call is answered, before any audio, so it is
+// the first packet on the SSRC. Some receivers (e.g. Asterisk before 16.19/18.5) start their
+// last-seen DTMF timestamp at 0 and accept only later events, so they drop a digit at timestamp 0
+// entirely. No packet may ever be written at timestamp 0.
+func TestSeqWriterTimestampOffset(t *testing.T) {
+	require.Greater(t, rtpTimestampOffset, 0)
+}
+
+// TestSeqWriterFirstPackets covers which timestamp the first packets of an SSRC get, for each order
+// of streams, writes and syncs. The wall clock stands still, so no catch-up applies.
+func TestSeqWriterFirstPackets(t *testing.T) {
+	type step int
+	const (
+		newAudio     step = iota // create the automatic stream
+		newManual                // create a manual stream
+		audioWrite               // write a frame of the automatic stream
+		manualWrite              // write a manual packet without a sync
+		manualSynced             // sync the manual stream, then write a packet
+		wait                     // wait for the next frame
+		waitReset                // wait for 11 frames, enough to reset the timeline
+	)
+	streamReset := (rtpStreamTSResetFrames + 1) * frame
+	cases := []struct {
+		name  string
+		steps []step
+		exp   []uint32 // in frames after rtpTimestampOffset
+	}{
+		{"manual_without_sync", []step{newManual, manualWrite, wait, manualWrite}, []uint32{0, 0}},
+		{"manual_with_sync", []step{newManual, manualSynced, wait, manualSynced}, []uint32{0, 1}},
+		{"audio", []step{newAudio, audioWrite, audioWrite}, []uint32{0, 1}},
+
+		{"manual_without_sync_unaffected_by_audio",
+			[]step{newManual, newAudio, manualWrite, audioWrite, wait, audioWrite, manualWrite},
+			[]uint32{0, 0, 1, 0}},
+		{"manual_with_sync_unaffected_by_audio",
+			[]step{newManual, newAudio, manualSynced, audioWrite, wait, audioWrite, manualSynced},
+			[]uint32{0, 0, 1, 1}},
+		{"manual_without_sync_unaffected_by_new_audio",
+			[]step{newManual, manualWrite, newAudio, audioWrite, wait, audioWrite, manualWrite},
+			[]uint32{0, 0, 1, 0}},
+		{"manual_with_sync_unaffected_by_new_audio",
+			[]step{newManual, manualSynced, newAudio, audioWrite, wait, audioWrite, manualSynced},
+			[]uint32{0, 0, 1, 1}},
+
+		{"new_audio_inherits_synced_timestamp",
+			[]step{newManual, manualSynced, wait, manualSynced, newAudio, audioWrite},
+			[]uint32{0, 1, 1}},
+		{"new_audio_inherits_anchor",
+			[]step{newManual, manualSynced, waitReset, newAudio, audioWrite},
+			[]uint32{0, 11}},
+		{"new_audio_inherits_unsynced_timestamp",
+			[]step{newManual, manualWrite, waitReset, newAudio, audioWrite},
+			[]uint32{0, 11}},
+
+		{"audio_anchors",
+			[]step{newAudio, audioWrite, wait, newManual, manualSynced},
+			[]uint32{0, 1}},
+		{"snyched_anchors",
+			[]step{newManual, manualSynced, waitReset, newAudio, audioWrite},
+			[]uint32{0, 11}},
+		{"unsnyched_anchors",
+			[]step{newManual, manualWrite, waitReset, newAudio, audioWrite},
+			[]uint32{0, 11}},
+
+		{"initial_wait_irrelevant_audio",
+			[]step{newAudio, wait, wait, audioWrite},
+			[]uint32{0}},
+		{"initial_wait_irrelevant_synced",
+			[]step{newManual, wait, wait, manualSynced},
+			[]uint32{0}},
+		{"initial_wait_irrelevant_unsynced",
+			[]step{newManual, wait, wait, manualWrite},
+			[]uint32{0}},
+
+		{"both_new_streams_defaults_to_offset",
+			[]step{newManual, newAudio, manualWrite, audioWrite, audioWrite},
+			[]uint32{0, 0, 1}},
+		{"unsynced_manual_starts_at_offset",
+			[]step{newManual, newAudio, manualSynced, audioWrite, audioWrite},
+			[]uint32{0, 0, 1}},
+		{"new_audio_unaffected_by_manual_write",
+			[]step{newManual, manualWrite, newAudio, audioWrite, audioWrite},
+			[]uint32{0, 0, 1}},
+		{"manual_with_sync_then_audio_audio_created_after",
+			[]step{newManual, manualSynced, newAudio, audioWrite, audioWrite},
+			[]uint32{0, 0, 1}},
+
+		{"permit_audio_runaway",
+			[]step{newAudio, newManual, audioWrite, audioWrite, manualSynced},
+			[]uint32{0, 1, 0}}, // Explicitly permit audio to outpace clock
+
+		{"allow_manual_lag",
+			[]step{newAudio, newManual, audioWrite, wait, audioWrite, manualWrite},
+			[]uint32{0, 1, 0}},
+		{"manual_sync_working",
+			[]step{newAudio, newManual, audioWrite, wait, audioWrite, manualSynced},
+			[]uint32{0, 1, 1}},
+		{"new_manual_inherits_audio_timestamp",
+			[]step{newAudio, audioWrite, wait, audioWrite, wait, newManual, manualWrite},
+			[]uint32{0, 1, 1}},
+		{"new_manual_sync_working",
+			[]step{newAudio, audioWrite, wait, audioWrite, wait, newManual, manualSynced},
+			[]uint32{0, 1, 2}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newTestSSRC(8000)
+			var audio, manual *Stream
+			var got []uint32
+			for _, st := range c.steps {
+				switch st {
+				case newAudio:
+					audio = s.NewStream(audioPT, 8000)
+				case newManual:
+					manual = s.NewManualStream(eventsPT)
+				case audioWrite:
+					got = append(got, s.write(t, audio, false, []byte{0}))
+				case manualWrite:
+					require.NoError(t, manual.WritePayloadAtCurrent([]byte{0}, true))
+					got = append(got, s.last())
+				case manualSynced:
+					got = append(got, s.write(t, manual, true, []byte{0}))
+				case wait:
+					s.clock.Add(frame)
+				case waitReset:
+					s.clock.Add(streamReset)
+				}
+			}
+			var exp []uint32
+			for _, f := range c.exp {
+				t.Logf("expected %d, got %d", f, got[len(exp)])
+				curExp := rtpTimestampOffset + f*s.inc
+				require.Greater(t, curExp, uint32(0)) // See rtpTimestampOffset comment
+				exp = append(exp, curExp)
+			}
+			require.Equal(t, exp, got)
+		})
+	}
+}
+
 func TestSeqWriterAutomatic(t *testing.T) {
 	t.Run("starts at offset, one frame per packet", func(t *testing.T) {
 		s := newTestSSRC(8000)
