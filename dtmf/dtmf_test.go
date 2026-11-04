@@ -160,7 +160,9 @@ func TestDTMFDelay(t *testing.T) {
 			t.Log("starting audio stream")
 			ctx, cancel := context.WithCancel(t.Context())
 			if !audioEnabled {
-				ctx, _ = context.WithTimeout(ctx, 3*rtp.DefFrameDur)
+				oCtx, oCancel := context.WithTimeout(ctx, 3*rtp.DefFrameDur)
+				defer oCancel()
+				ctx = oCtx
 			}
 			audioDone := make(chan struct{})
 			go func() {

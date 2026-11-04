@@ -43,12 +43,12 @@ func TestRTPStreams(t *testing.T) {
 		for i := range N {
 			exp = append(exp,
 				packet{
-					TS:   160 * uint32(i),
+					TS:   rtpTimestampOffset + 160*uint32(i),
 					Type: 0,
 					Ind:  byte(i),
 				},
 				packet{
-					TS:   160 * uint32(i),
+					TS:   rtpTimestampOffset + 160*uint32(i),
 					Type: 101,
 					Ind:  byte(i),
 				},
@@ -100,7 +100,7 @@ func TestRTPStreams(t *testing.T) {
 			for j := range batch {
 				ind := i*batch + j
 				exp = append(exp, packet{
-					TS:   160 * uint32(ind),
+					TS:   rtpTimestampOffset + 160*uint32(ind),
 					Type: 0,
 					Ind:  byte(ind),
 				})
@@ -108,7 +108,7 @@ func TestRTPStreams(t *testing.T) {
 			for j := range batch {
 				ind := i*batch + j
 				exp = append(exp, packet{
-					TS:   160 * uint32(i*batch),
+					TS:   rtpTimestampOffset + 160*uint32(i*batch),
 					Type: 101,
 					Ind:  byte(ind),
 				})
@@ -156,14 +156,14 @@ func TestRTPStreams(t *testing.T) {
 		var exp []packet
 		for i := range N {
 			exp = append(exp, packet{
-				TS:   0,
+				TS:   rtpTimestampOffset + 0,
 				Type: 101,
 				Ind:  byte(i),
 			})
 		}
 		for i := range N {
 			exp = append(exp, packet{
-				TS:   160*N + 160*uint32(i),
+				TS:   rtpTimestampOffset + 160*N + 160*uint32(i),
 				Type: 0,
 				Ind:  byte(i),
 			})

@@ -126,16 +126,16 @@ func TestSeqWriterPackets(t *testing.T) {
 }
 
 func TestSeqWriterAutomatic(t *testing.T) {
-	t.Run("starts at zero, one frame per packet", func(t *testing.T) {
+	t.Run("starts at offset, one frame per packet", func(t *testing.T) {
 		s := newTestSSRC(8000)
 		audio := s.NewStream(audioPT, 8000)
-		require.Equal(t, s.frames(0, 10), s.paced(t, audio, 10, false, []byte{0}))
+		require.Equal(t, s.frames(rtpTimestampOffset, 10), s.paced(t, audio, 10, false, []byte{0}))
 	})
 
 	t.Run("uses the SSRC clock rate", func(t *testing.T) {
 		s := newTestSSRC(48000)
 		audio := s.NewStream(audioPT, 48000)
-		require.Equal(t, []uint32{0, 960, 1920}, s.paced(t, audio, 3, false, []byte{0}))
+		require.Equal(t, s.frames(rtpTimestampOffset, 3), s.paced(t, audio, 3, false, []byte{0}))
 	})
 
 	t.Run("bursts never share a timestamp", func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestSeqWriterAutomatic(t *testing.T) {
 		for range 5 {
 			ts = append(ts, s.write(t, audio, false, []byte{0}))
 		}
-		require.Equal(t, s.frames(0, 5), ts)
+		require.Equal(t, s.frames(rtpTimestampOffset, 5), ts)
 	})
 
 	t.Run("scheduling jitter does not move timestamps", func(t *testing.T) {
@@ -157,7 +157,7 @@ func TestSeqWriterAutomatic(t *testing.T) {
 			s.clock.t = start.Add(time.Duration(i)*frame + j*time.Millisecond)
 			ts = append(ts, s.write(t, audio, false, []byte{0}))
 		}
-		require.Equal(t, s.frames(0, 10), ts)
+		require.Equal(t, s.frames(rtpTimestampOffset, 10), ts)
 	})
 
 	t.Run("stall below the threshold is caught up by a burst", func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestSeqWriterAutomatic(t *testing.T) {
 			ts = append(ts, s.write(t, audio, false, []byte{0}))
 		}
 		ts = append(ts, s.paced(t, audio, 5, false, []byte{0})...)
-		require.Equal(t, s.frames(0, 16), ts)
+		require.Equal(t, s.frames(rtpTimestampOffset, 16), ts)
 	})
 
 	t.Run("gap above the threshold jumps to the nearest wall clock frame", func(t *testing.T) {
@@ -185,7 +185,7 @@ func TestSeqWriterAutomatic(t *testing.T) {
 			s.paced(t, audio, 5, false, []byte{0}) // ends at 5 frames
 			s.clock.Add(c.gap)
 			ts := s.paced(t, audio, 3, false, []byte{0})
-			require.Equal(t, s.frames(c.first*s.inc, 3), ts, "gap %v", c.gap)
+			require.Equal(t, s.frames(rtpTimestampOffset+c.first*s.inc, 3), ts, "gap %v", c.gap)
 		}
 	})
 
@@ -194,7 +194,7 @@ func TestSeqWriterAutomatic(t *testing.T) {
 		audio := s.NewStream(audioPT, 8000)
 		s.paced(t, audio, 5, false, []byte{0})
 		s.clock.Add(rtpStreamTSResetFrames * frame)
-		require.Equal(t, 5*s.inc, s.write(t, audio, false, []byte{0}))
+		require.Equal(t, rtpTimestampOffset+5*s.inc, s.write(t, audio, false, []byte{0}))
 	})
 
 	t.Run("lag lost to repeated stalls is recovered", func(t *testing.T) {
@@ -213,9 +213,9 @@ func TestSeqWriterAutomatic(t *testing.T) {
 				ts := s.write(t, audio, false, []byte{0})
 				if ts != prev+s.inc {
 					jumps++
-					require.Equal(t, wallFrames()*s.inc, ts, "jumps land on the wall clock")
+					require.Equal(t, rtpTimestampOffset+wallFrames()*s.inc, ts, "jumps land on the wall clock")
 				}
-				lag := int(wallFrames()) - int(ts/s.inc)
+				lag := int(wallFrames()) - int((ts-rtpTimestampOffset)/s.inc)
 				require.LessOrEqual(t, lag, rtpStreamTSResetFrames)
 				prev = ts
 			}
@@ -227,7 +227,7 @@ func TestSeqWriterAutomatic(t *testing.T) {
 		s := newTestSSRC(8000)
 		audio := s.NewStream(audioPT, 8000)
 		s.paced(t, audio, 2, false, []byte{0})
-		require.Equal(t, 2*s.inc, audio.GetCurrentTimestamp())
+		require.Equal(t, rtpTimestampOffset+2*s.inc, audio.GetCurrentTimestamp())
 	})
 
 	t.Run("timeline crosses the 32-bit wrap", func(t *testing.T) {
@@ -239,7 +239,7 @@ func TestSeqWriterAutomatic(t *testing.T) {
 		for _, h := range []time.Duration{12, 24, 25} {
 			s.clock.t = start.Add(h * time.Hour)
 			ts := s.paced(t, audio, 2, false, []byte{0})
-			first := uint32(uint64(h*time.Hour/frame) * uint64(s.inc))
+			first := rtpTimestampOffset + uint32(uint64(h*time.Hour/frame)*uint64(s.inc))
 			require.Equal(t, s.frames(first, 2), ts)
 		}
 	})
@@ -253,11 +253,11 @@ func TestSeqWriterManual(t *testing.T) {
 		s.paced(t, audio, 10, false, []byte{0})
 
 		require.NoError(t, events.SyncTimestamp())
-		require.Equal(t, 10*s.inc, events.GetCurrentTimestamp(), "the wall clock frame, which audio writes next")
+		require.Equal(t, rtpTimestampOffset+10*s.inc, events.GetCurrentTimestamp(), "the wall clock frame, which audio writes next")
 		for i := range 3 {
 			require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, i == 0))
-			require.Equal(t, 10*s.inc, s.last())
-			require.Equal(t, 10*s.inc+uint32(i)*s.inc, s.write(t, audio, false, []byte{0}), "audio is not affected")
+			require.Equal(t, rtpTimestampOffset+10*s.inc, s.last())
+			require.Equal(t, rtpTimestampOffset+10*s.inc+uint32(i)*s.inc, s.write(t, audio, false, []byte{0}), "audio is not affected")
 			s.clock.Add(frame)
 		}
 	})
@@ -269,11 +269,11 @@ func TestSeqWriterManual(t *testing.T) {
 		s.paced(t, audio, 10, false, []byte{0}) // last audio frame is 9, wall clock is at 10
 		s.clock.Add(3 * frame)
 		require.NoError(t, events.SyncTimestamp())
-		require.Equal(t, 13*s.inc, events.GetCurrentTimestamp(), "within the threshold")
+		require.Equal(t, rtpTimestampOffset+13*s.inc, events.GetCurrentTimestamp(), "within the threshold")
 
 		s.clock.Add(rtpStreamTSResetFrames * frame)
 		require.NoError(t, events.SyncTimestamp())
-		require.Equal(t, 23*s.inc, events.GetCurrentTimestamp(), "past the threshold")
+		require.Equal(t, rtpTimestampOffset+23*s.inc, events.GetCurrentTimestamp(), "past the threshold")
 	})
 
 	t.Run("events without audio", func(t *testing.T) {
@@ -282,12 +282,12 @@ func TestSeqWriterManual(t *testing.T) {
 
 		require.NoError(t, events.SyncTimestamp())
 		require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, true))
-		require.Zero(t, s.last(), "the first packet anchors the timeline at 0")
+		require.Equal(t, uint32(rtpTimestampOffset), s.last(), "the first packet anchors the timeline at the offset")
 
 		s.clock.Add(26 * frame) // tone and pause of a digit
 		require.NoError(t, events.SyncTimestamp())
 		require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, true))
-		require.Equal(t, 26*s.inc, s.last())
+		require.Equal(t, rtpTimestampOffset+26*s.inc, s.last())
 	})
 
 	t.Run("first event write anchors without a sync", func(t *testing.T) {
@@ -296,7 +296,7 @@ func TestSeqWriterManual(t *testing.T) {
 		events := s.NewManualStream(eventsPT)
 		require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, true))
 		s.clock.Add(40 * frame)
-		require.Equal(t, 40*s.inc, s.write(t, audio, false, []byte{0}))
+		require.Equal(t, rtpTimestampOffset+40*s.inc, s.write(t, audio, false, []byte{0}))
 	})
 
 	t.Run("audio starting after events lines up with the anchor", func(t *testing.T) {
@@ -322,7 +322,7 @@ func TestSeqWriterManual(t *testing.T) {
 				s.clock.t = start.Add(150*frame + c.phase + time.Duration(i)*frame + j*time.Millisecond)
 				ts = append(ts, s.write(t, audio, false, []byte{0}))
 			}
-			require.Equal(t, s.frames(c.first*s.inc, 8), ts, "phase %v", c.phase)
+			require.Equal(t, s.frames(rtpTimestampOffset+c.first*s.inc, 8), ts, "phase %v", c.phase)
 		}
 	})
 
@@ -334,15 +334,15 @@ func TestSeqWriterManual(t *testing.T) {
 
 		require.NoError(t, events.SyncTimestamp())
 		require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, true))
-		require.Equal(t, 10*s.inc, s.last())
+		require.Equal(t, rtpTimestampOffset+10*s.inc, s.last())
 
 		s.clock.Add(26 * frame)
 		require.NoError(t, events.SyncTimestamp())
 		require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, true))
-		require.Equal(t, 36*s.inc, s.last(), "follows the wall clock without audio")
+		require.Equal(t, rtpTimestampOffset+36*s.inc, s.last(), "follows the wall clock without audio")
 
 		s.clock.Add(15 * frame)
-		require.Equal(t, 51*s.inc, s.write(t, audio, false, []byte{0}), "audio resumes on the wall clock, after the events")
+		require.Equal(t, rtpTimestampOffset+51*s.inc, s.write(t, audio, false, []byte{0}), "audio resumes on the wall clock, after the events")
 	})
 
 	t.Run("audio resuming within the threshold of an event continues from it", func(t *testing.T) {
@@ -353,11 +353,11 @@ func TestSeqWriterManual(t *testing.T) {
 		s.clock.Add(26 * frame)
 		require.NoError(t, events.SyncTimestamp())
 		require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, true))
-		require.Equal(t, 36*s.inc, s.last())
+		require.Equal(t, rtpTimestampOffset+36*s.inc, s.last())
 
 		s.clock.Add(5 * frame)
-		require.Equal(t, 36*s.inc, s.write(t, audio, false, []byte{0}), "not behind the event")
-		require.Equal(t, 37*s.inc, s.write(t, audio, false, []byte{0}))
+		require.Equal(t, rtpTimestampOffset+36*s.inc, s.write(t, audio, false, []byte{0}), "not behind the event")
+		require.Equal(t, rtpTimestampOffset+37*s.inc, s.write(t, audio, false, []byte{0}))
 	})
 
 	t.Run("audio resuming right after an event sync does not go behind it", func(t *testing.T) {
@@ -398,7 +398,7 @@ func TestSeqWriterManual(t *testing.T) {
 		cumulative := time.Duration(0)
 		for _, timestamp := range timestamps {
 			require.NoError(t, events.SyncTimestamp())
-			expectedTS := uint32(cumulative.Seconds() * float64(clockRate))
+			expectedTS := rtpTimestampOffset + uint32(cumulative.Seconds()*float64(clockRate))
 			require.Equal(t, expectedTS, events.GetCurrentTimestamp())
 			s.clock.Add(timestamp)
 		}
@@ -416,12 +416,12 @@ func TestSeqWriterManual(t *testing.T) {
 			for range 4 {
 				audioTS = append(audioTS, s.write(t, audio, false, []byte{0}))
 				require.NoError(t, events.WritePayloadAtCurrent([]byte{0}, false))
-				require.Equal(t, uint32(d*8)*s.inc, s.last(), "digit %d stays at the frame it started on", d)
+				require.Equal(t, rtpTimestampOffset+uint32(d*8)*s.inc, s.last(), "digit %d stays at the frame it started on", d)
 				s.clock.Add(frame)
 			}
 			audioTS = append(audioTS, s.paced(t, audio, 4, false, []byte{0})...)
 		}
-		require.Equal(t, s.frames(0, 24), audioTS, "audio is not affected")
+		require.Equal(t, s.frames(rtpTimestampOffset, 24), audioTS, "audio is not affected")
 	})
 
 	t.Run("alternating events", func(t *testing.T) {
@@ -436,10 +436,10 @@ func TestSeqWriterManual(t *testing.T) {
 				require.NoError(t, ev2.SyncTimestamp())
 			}
 			require.NoError(t, ev1.WritePayloadAtCurrent([]byte{0}, false))
-			require.Zero(t, s.last())
+			require.Equal(t, uint32(rtpTimestampOffset), s.last())
 			if i >= 2 {
 				require.NoError(t, ev2.WritePayloadAtCurrent([]byte{0}, false))
-				require.Equal(t, 2*s.inc, s.last(), "not pulled to the other stream")
+				require.Equal(t, rtpTimestampOffset+2*s.inc, s.last(), "not pulled to the other stream")
 			}
 			s.clock.Add(frame)
 		}
@@ -450,7 +450,7 @@ func TestSeqWriterManual(t *testing.T) {
 			if i%2 == 1 {
 				st = ev2
 			}
-			require.Equal(t, uint32(6+i*3)*s.inc, s.write(t, st, true, []byte{0}))
+			require.Equal(t, rtpTimestampOffset+uint32(6+i*3)*s.inc, s.write(t, st, true, []byte{0}))
 			s.clock.Add(3 * frame)
 		}
 	})
@@ -465,7 +465,7 @@ func TestSeqWriterManual(t *testing.T) {
 			s.clock.Add(frame)
 		}
 		for _, p := range *s.buf {
-			require.Zero(t, p.Timestamp)
+			require.Equal(t, uint32(rtpTimestampOffset), p.Timestamp)
 		}
 	})
 }

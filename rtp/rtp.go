@@ -33,6 +33,10 @@ import (
 // and stay below the spacing of DTMF digits (26 frames), so digits sent without audio get distinct timestamps.
 const rtpStreamTSResetFrames = 10 // 200ms @ ptime=20ms
 
+// Some stacks drop a DTMF digit with ts=0, due to a faulty initialization of
+// their internal lastSeen timestamp. Start at this ts to avoid this issue.
+const rtpTimestampOffset = 48000
+
 type BytesFrame interface {
 	media.BytesFrame
 }
@@ -135,6 +139,7 @@ func NewSeqWriter(w Writer, clockRate int, opts ...SeqWriterOpt) *SeqWriter {
 		clockRate: clockRate,
 		frameTS:   uint32(clockRate / DefFramesPerSec),
 		now:       time.Now,
+		maxTS:     rtpTimestampOffset,
 	}
 	s.h = rtp.Header{
 		Version: 2,
@@ -149,19 +154,20 @@ func NewSeqWriter(w Writer, clockRate int, opts ...SeqWriterOpt) *SeqWriter {
 // SeqWriter writes the RTP packets of a single SSRC: one sequence number space and one timestamp clock,
 // shared by all of its streams.
 //
-// The first packet written by any stream anchors timestamp 0 to the wall clock. Each stream keeps its own
-// timestamp, and corrects it with CurTS before using it.
+// The first packet written by any stream anchors timestamp rtpTimestampOffset to the wall clock.
+// Each stream keeps its own timestamp, and corrects it with CurTS before using it.
 type SeqWriter struct {
 	w         Writer
 	clockRate int
 	frameTS   uint32 // timestamp units per frame
 	now       func() time.Time
 
-	mu     sync.RWMutex
-	h      Header
-	auto   bool      // the automatic stream was created
-	anchor time.Time // wall clock at timestamp 0
-	maxTS  uint32    // latest timestamp written
+	mu         sync.RWMutex
+	h          Header
+	auto       bool      // the automatic stream was created
+	anchorTime time.Time // wallclock at anchor point
+	anchorTS   uint32    // timestamp at anchorTime
+	maxTS      uint32    // latest timestamp written
 }
 
 func (s *SeqWriter) String() string {
@@ -178,14 +184,14 @@ func (s *SeqWriter) GetMaxTS() uint32 {
 func (s *SeqWriter) ProjectWallclockTS() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.anchor.IsZero() {
-		return 0
+	if s.anchorTime.IsZero() {
+		return s.maxTS
 	}
 	return s.projectWallclockTS()
 }
 
 func (s *SeqWriter) projectWallclockTS() uint32 {
-	return uint32(s.now().Sub(s.anchor).Round(DefFrameDur)/DefFrameDur) * s.frameTS
+	return s.anchorTS + uint32(s.now().Sub(s.anchorTime).Round(DefFrameDur)/DefFrameDur)*s.frameTS
 }
 
 // CurTS corrects a stream's timestamp: always ahead of the latest packet written,
@@ -199,7 +205,7 @@ func (s *SeqWriter) CurTS(ts uint32) uint32 {
 	if int32(s.maxTS-ts) > 0 {
 		ts = s.maxTS
 	}
-	if s.anchor.IsZero() {
+	if s.anchorTime.IsZero() {
 		return ts
 	}
 	// Whole frames only: jitter within a frame must not move timestamps.
@@ -214,8 +220,9 @@ func (s *SeqWriter) CurTS(ts uint32) uint32 {
 func (s *SeqWriter) WriteEvent(ev *Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.anchor.IsZero() {
-		s.anchor = s.now()
+	if s.anchorTime.IsZero() {
+		s.anchorTime = s.now()
+		s.anchorTS = ev.Timestamp
 	}
 	s.h.PayloadType = ev.Type
 	s.h.Marker = ev.Marker
@@ -242,14 +249,14 @@ func (s *SeqWriter) NewStream(typ byte, clockRate int) *Stream {
 		panic("rtp: SSRC already has an automatic stream")
 	}
 	s.auto = true
-	return &Stream{s: s, typ: typ}
+	return &Stream{s: s, typ: typ, ts: s.maxTS}
 }
 
 // NewManualStream creates a stream whose timestamp is set by the caller with SyncTimestamp,
 // in SeqWriter clock units. Payloads with a clock rate other than the SeqWriter's, such as
 // telephone-event, must use a manual stream.
 func (s *SeqWriter) NewManualStream(typ byte) *Stream {
-	return &Stream{s: s, typ: typ, manual: true}
+	return &Stream{s: s, typ: typ, manual: true, ts: s.maxTS}
 }
 
 var _ media.BytesWriter = (*Stream)(nil)
