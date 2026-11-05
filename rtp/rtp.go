@@ -256,7 +256,10 @@ func (s *SeqWriter) NewStream(typ byte, clockRate int) *Stream {
 // in SeqWriter clock units. Payloads with a clock rate other than the SeqWriter's, such as
 // telephone-event, must use a manual stream.
 func (s *SeqWriter) NewManualStream(typ byte) *Stream {
-	return &Stream{s: s, typ: typ, manual: true, ts: s.maxTS}
+	s.mu.RLock()
+	ts := s.maxTS
+	s.mu.RUnlock()
+	return &Stream{s: s, typ: typ, manual: true, ts: ts}
 }
 
 var _ media.BytesWriter = (*Stream)(nil)
