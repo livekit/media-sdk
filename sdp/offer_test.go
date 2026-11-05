@@ -477,6 +477,25 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
+				// Pick AMR-WB in octet-aligned mode.
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "1"}, {Key: "mode-set", Val: "8"},
+				}}),
+			},
+		},
+		{
+			name: "amrwb unknown octet align",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "fmtp", Value: "101 octet-align=2"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
 				// Pick PCMU, AMR-WB encoding doesn't match.
 				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
 			},
