@@ -23,7 +23,7 @@
 package media
 
 // Code below was taken from https://github.com/gopxl/beep/blob/main/resample.go
-// and adapted for our use case (mono audio and int16 samples).
+// and adapted for our use case (interleaved int16 samples).
 
 import (
 	"fmt"
@@ -60,15 +60,15 @@ import (
 // negligible quality improvements.
 //
 // Resample propagates errors from s.
-func beepResample(quality int, old, new int, s Reader[PCM16Sample]) *beepResampler {
-	return beepResampleRatio(quality, float64(old)/float64(new), s)
+func beepResample(quality int, old, new int, channels int, s Reader[PCM16Sample]) *beepResampler {
+	return beepResampleRatio(quality, float64(old)/float64(new), channels, s)
 }
 
 // ResampleRatio is same as Resample, except it takes the ratio of the old and the new sample rate,
 // specifically, the old sample rate divided by the new sample rate. Aside from correcting the
 // sample rate, this can be used to change the speed of the audio. For example, resampling at the
 // ratio of 2 and playing at the original sample rate will cause doubled speed in playback.
-func beepResampleRatio(quality int, ratio float64, s Reader[PCM16Sample]) *beepResampler {
+func beepResampleRatio(quality int, ratio float64, channels int, s Reader[PCM16Sample]) *beepResampler {
 	if quality < 1 || 64 < quality {
 		panic(fmt.Errorf("resample: invalid quality: %d", quality))
 	}
@@ -77,10 +77,11 @@ func beepResampleRatio(quality int, ratio float64, s Reader[PCM16Sample]) *beepR
 	}
 	return &beepResampler{
 		s:     s,
+		ch:    channels,
 		ratio: ratio,
 		first: true,
-		buf1:  make(PCM16Sample, 512),
-		buf2:  make(PCM16Sample, 512),
+		buf1:  make(PCM16Sample, 512*channels),
+		buf2:  make(PCM16Sample, 512*channels),
 		pts:   make([]point, quality*2),
 		off:   0,
 		pos:   0,
@@ -92,6 +93,7 @@ func beepResampleRatio(quality int, ratio float64, s Reader[PCM16Sample]) *beepR
 // streaming.
 type beepResampler struct {
 	s          Reader[PCM16Sample] // the orignal streamer
+	ch         int                 // samples per interleaved frame; off, pos and the indexes below count frames
 	ratio      float64             // old sample rate / new sample rate
 	first      bool                // true when Stream was not called before
 	buf1, buf2 PCM16Sample         // buf1 contains previous buf2, new data goes into buf2, buf1 is because interpolation might require old samples
@@ -108,61 +110,71 @@ func (r *beepResampler) Stream(samples PCM16Sample) (n int, ok bool) {
 		r.buf2 = r.buf2[:sn]
 		r.first = false
 	}
-	// we start resampling, sample by sample
-	for len(samples) > 0 {
+	ch := r.ch
+	for len(samples) >= ch {
 	again:
 		// calculate the current position in the original data
 		j := float64(r.pos) * r.ratio
 
-		// find quality*2 closest samples to j and translate them to points for interpolation
-		for pi := range r.pts {
-			// calculate the index of one of the closest samples
-			k := int(j) + pi - len(r.pts)/2 + 1
+		for c := range ch {
+			// find quality*2 closest samples to j and translate them to points for interpolation
+			for pi := range r.pts {
+				// calculate the index of one of the closest samples
+				k := int(j) + pi - len(r.pts)/2 + 1
 
-			var y int16
-			switch {
-			// the sample is in buf1
-			case k < r.off:
-				y = r.buf1[len(r.buf1)+k-r.off]
-			// the sample is in buf2
-			case k < r.off+len(r.buf2):
-				y = r.buf2[k-r.off]
-			// the sample is beyond buf2, so we need to load new data
-			case k >= r.off+len(r.buf2):
-				// we load into buf1
-				sn, _ := r.s.ReadSample(r.buf1)
-				// this condition happens when the original Streamer got
-				// drained and j is after the end of the
-				// original data
-				if int(j) >= r.off+len(r.buf2)+sn {
-					return n, n > 0
-				}
-				// this condition happens when the original Streamer got
-				// drained and this one of the closest samples is after the
-				// end of the original data
-				if k >= r.off+len(r.buf2)+sn {
+				var y int16
+				switch {
+				// the sample is in buf1
+				case k < r.off:
+					y = r.buf1[len(r.buf1)+(k-r.off)*ch+c]
+				// the sample is in buf2
+				case k < r.off+len(r.buf2)/ch:
+					y = r.buf2[(k-r.off)*ch+c]
+				// the sample is beyond buf2, so we need to load new data
+				case k >= r.off+len(r.buf2)/ch:
+					if r.load() {
+						goto again
+					}
+					// this condition happens when the original Streamer got
+					// drained and j is after the end of the
+					// original data
+					if int(j) >= r.off+len(r.buf2)/ch {
+						return n, n > 0
+					}
+					// the original Streamer got drained and this one of the
+					// closest samples is after the end of the original data
 					y = 0
-					break
 				}
-				// otherwise everything is fine, we swap buffers and start
-				// calculating the sample again
-				r.off += len(r.buf2)
-				r.buf1 = r.buf1[:sn]
-				r.buf1, r.buf2 = r.buf2, r.buf1
-				goto again
+
+				r.pts[pi] = point{float64(k), float64(y) / 0x7fff}
 			}
 
-			r.pts[pi] = point{float64(k), float64(y) / 0x7fff}
+			// calculate the resampled sample using polynomial interpolation from the
+			// quality*2 closest samples
+			samples[c] = int16(lagrange(r.pts, j) * 0x7fff)
 		}
-
-		// calculate the resampled sample using polynomial interpolation from the
-		// quality*2 closest samples
-		samples[0] = int16(lagrange(r.pts, j) * 0x7fff)
-		samples = samples[1:]
-		n++
+		samples = samples[ch:]
+		n += ch
 		r.pos++
 	}
 	return n, true
+}
+
+// Swapping in a short buf2 would leave buf1 too few frames of history, so buf2 fills to capacity
+// first. A partial frame stays at the end of buf2 until the next read completes it.
+func (r *beepResampler) load() bool {
+	if len(r.buf2) < cap(r.buf2) {
+		sn, _ := r.s.ReadSample(r.buf2[len(r.buf2):cap(r.buf2)])
+		r.buf2 = r.buf2[:len(r.buf2)+sn]
+		return sn > 0
+	}
+	sn, _ := r.s.ReadSample(r.buf1[:cap(r.buf1)])
+	if sn == 0 {
+		return false
+	}
+	r.off += len(r.buf2) / r.ch
+	r.buf1, r.buf2 = r.buf2, r.buf1[:sn]
+	return true
 }
 
 // Ratio returns the current resampling ratio.

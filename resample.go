@@ -33,13 +33,7 @@ func Resample(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate
 	if dstSampleRate == srcSampleRate {
 		return append(dst, src...)
 	}
-	if len(opts) == 0 {
-		opts = DefaultResampleOptions
-	}
-	var opt resampleOptions
-	for _, o := range opts {
-		o(&opt)
-	}
+	opt := newResampleOptions(opts)
 	if opt.Predictable {
 		return resampleBufferBeep(dst, dstSampleRate, src, srcSampleRate, &opt)
 	}
@@ -47,6 +41,27 @@ func Resample(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate
 }
 
 type ResampleOption func(opts *resampleOptions)
+
+func newResampleOptions(opts []ResampleOption) resampleOptions {
+	opt := resampleOptions{Channels: 1}
+	for _, o := range DefaultResampleOptions {
+		o(&opt)
+	}
+	for _, o := range opts {
+		o(&opt)
+	}
+	return opt
+}
+
+// WithResampleChannels sets how many channels the samples interleave. The default is mono.
+func WithResampleChannels(channels int) ResampleOption {
+	if channels < 1 {
+		panic(fmt.Errorf("resample: invalid channel count: %d", channels))
+	}
+	return func(opts *resampleOptions) {
+		opts.Channels = channels
+	}
+}
 
 func WithPredictableResample(enable bool) ResampleOption {
 	return func(opts *resampleOptions) {
@@ -62,6 +77,7 @@ func WithResampleDump(inputName, outputName string) ResampleOption {
 }
 
 type resampleOptions struct {
+	Channels    int
 	Predictable bool
 	DumpInput   string
 	DumpOutput  string
@@ -75,13 +91,7 @@ func ResampleWriter(w PCM16Writer, sampleRate int, opts ...ResampleOption) (w2 P
 	if dstRate == srcRate {
 		return w
 	}
-	if len(opts) == 0 {
-		opts = DefaultResampleOptions
-	}
-	var opt resampleOptions
-	for _, o := range opts {
-		o(&opt)
-	}
+	opt := newResampleOptions(opts)
 
 	if resampleDumpToFile {
 		id := resampleID.Add(1)

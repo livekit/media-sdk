@@ -19,7 +19,7 @@ import "fmt"
 const beepQuality = 3
 
 func resampleBufferBeep(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int, opts *resampleOptions) PCM16Sample {
-	r := beepResample(beepQuality, srcSampleRate, dstSampleRate, NewPCM16BufferReader(src))
+	r := beepResample(beepQuality, srcSampleRate, dstSampleRate, opts.Channels, NewPCM16BufferReader(src))
 	sz := 0
 	if dstSampleRate < srcSampleRate {
 		div := srcSampleRate / dstSampleRate
@@ -41,7 +41,7 @@ func newResampleWriterBeep(w WriteCloser[PCM16Sample], sampleRate int, opts *res
 		srcRate: srcRate,
 		dstRate: dstRate,
 	}
-	r.r = beepResample(beepQuality, srcRate, dstRate, r)
+	r.r = beepResample(beepQuality, srcRate, dstRate, opts.Channels, r)
 	return r
 }
 
