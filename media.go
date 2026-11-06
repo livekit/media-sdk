@@ -83,7 +83,7 @@ func (w *funcWriteCloser[T]) SampleRate() int            { return w.rate }
 func (w *funcWriteCloser[T]) Close() error               { return nil }
 func (w *funcWriteCloser[T]) WriteSample(sample T) error { return w.fn(sample) }
 
-func NewSwitchWriter(sampleRate int) *SwitchWriter {
+func NewSwitchWriter(sampleRate int, opts ...ResampleOption) *SwitchWriter {
 	// This protects from a case when sample rate is not initialized,
 	// but still allows passing -1 to delay initialization.
 	// If sample rate is still uninitialized when another writer is attached,
@@ -94,7 +94,7 @@ func NewSwitchWriter(sampleRate int) *SwitchWriter {
 	if sampleRate < 0 {
 		sampleRate = -1 // checked by SetSampleRate
 	}
-	w := &SwitchWriter{}
+	w := &SwitchWriter{opts: opts}
 	w.sampleRate.Store(int32(sampleRate))
 	return w
 }
@@ -102,6 +102,7 @@ func NewSwitchWriter(sampleRate int) *SwitchWriter {
 type SwitchWriter struct {
 	WriteCloserSwitch[PCM16Sample]
 	disabled atomic.Bool
+	opts     []ResampleOption
 }
 
 func (s *SwitchWriter) Enable() {
@@ -125,7 +126,7 @@ func (s *SwitchWriter) Get() PCM16Writer {
 func (s *SwitchWriter) Swap(w PCM16Writer) PCM16Writer {
 	if w != nil {
 		if rate := s.SampleRate(); rate != w.SampleRate() {
-			w = ResampleWriter(w, rate)
+			w = ResampleWriter(w, rate, s.opts...)
 		}
 	}
 	old := s.WriteCloserSwitch.Swap(w)

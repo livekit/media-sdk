@@ -33,17 +33,6 @@ import (
 	"unsafe"
 )
 
-func resampleSize(dstSampleRate, srcSampleRate int, srcSize int) int {
-	if dstSampleRate < srcSampleRate {
-		div := srcSampleRate / dstSampleRate
-		sz := srcSize / div
-		return sz
-	}
-	mul := dstSampleRate / srcSampleRate
-	sz := srcSize * mul
-	return sz
-}
-
 func resampleBuffer(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int, opts *resampleOptions) PCM16Sample {
 	w := newResampleWriter(NewPCM16BufferWriter(&dst, dstSampleRate), srcSampleRate, opts)
 	err := w.WriteSample(src)
@@ -61,11 +50,11 @@ func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int, opts *resampl
 		w:       w,
 		srcRate: srcRate,
 		dstRate: dstRate,
-		buffer:  0, // set larger buffer for better resampler quality (see below)
+		out:     frameBuffer{srcRate: srcRate, dstRate: dstRate, ch: opts.Channels},
 	}
 	quality := int(C.SOXR_LQ)
 	var err error
-	r.r, err = newSoxr(dstRate, srcRate, quality)
+	r.r, err = newSoxr(dstRate, srcRate, opts.Channels, quality)
 	if err != nil {
 		panic(err)
 	}
@@ -73,17 +62,14 @@ func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int, opts *resampl
 }
 
 type resampleWriter struct {
-	mu       sync.Mutex
-	w        WriteCloser[PCM16Sample]
-	r        *soxrResampler
-	srcRate  int
-	dstRate  int
-	dstFrame int
-
-	// The resampler could actually consume multiple full frames and emit just one.
-	// This variable controls how many full frames we intentionally keep. Useful for higher resampler quality.
-	buffer int
-	buf    PCM16Sample
+	mu      sync.Mutex
+	w       WriteCloser[PCM16Sample]
+	r       *soxrResampler
+	srcRate int
+	dstRate int
+	out     frameBuffer
+	// soxr takes whole frames, so a write ending mid-frame leaves its tail here for the next write.
+	partial PCM16Sample
 }
 
 func (w *resampleWriter) String() string {
@@ -97,72 +83,51 @@ func (w *resampleWriter) SampleRate() int {
 func (w *resampleWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// Flush soxr buffer to our buffer.
+	if w.r.done.Load() {
+		return errResamplerClosed
+	}
 	var err error
-	w.buf, _, err = w.r.Resample(w.buf, nil)
-	if err != nil {
-		return err
-	}
-	// Close soxr resampler.
+	w.out.buf, err = w.r.Resample(w.out.buf, nil)
 	_ = w.r.Close()
-	// Flush our own PCM frame buffer to the underlying writer.
-	_ = w.flush(0)
-	err2 := w.w.Close()
-	if err2 != nil {
-		err = err2
-	}
-	return err
-}
-
-func (w *resampleWriter) flush(minSize int) error {
-	if len(w.buf) == 0 {
-		return nil
-	}
-	frame := w.dstFrame
-	if frame == 0 {
-		frame = len(w.buf)
-	}
-	var last error
-	for len(w.buf) > 0 && len(w.buf) >= minSize {
-		sz := frame
-		if sz > len(w.buf) {
-			sz = len(w.buf)
-		}
-		if err := w.w.WriteSample(w.buf[:sz]); err != nil {
-			last = err
-		}
-		n := copy(w.buf, w.buf[sz:])
-		w.buf = w.buf[:n]
-	}
-	return last
+	return errors.Join(err, w.out.drain(w.w), partialFrameErr(len(w.partial)), w.w.Close())
 }
 
 func (w *resampleWriter) WriteSample(data PCM16Sample) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.r.done.Load() {
+		return errResamplerClosed
+	}
+	if len(w.partial) != 0 {
+		data = append(slices.Clip(w.partial), data...)
+	}
+	ch := w.r.channels
+	whole := len(data) - len(data)%ch
+	w.partial = append(w.partial[:0], data[whole:]...)
+	data = data[:whole]
 	if len(data) == 0 {
 		return nil
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
 	var err error
 	// Write input to the resampler buffer.
-	w.buf, _, err = w.r.Resample(w.buf, data)
+	w.out.buf, err = w.r.Resample(w.out.buf, data)
 	if err != nil {
 		return err
 	}
 	// Resampler will likely return a short buffer in the first run. In that case, we emit no samples on the first call.
 	// This will cause a one frame delay for each resampler. Flushing the sampler, however will lead to frame
 	// discontinuity, and thus - distortions on the frame boundaries.
-	dstFrame := resampleSize(w.dstRate, w.srcRate, len(data))
-	w.dstFrame = max(w.dstFrame, dstFrame)
-	return w.flush(w.dstFrame * (1 + w.buffer))
+	w.out.queue(len(data) / ch)
+	return w.out.flush(w.w)
 }
 
 type soxrResampler struct {
-	ptr     C.soxr_t
-	srcRate int
-	dstRate int
-	maxIn   int
-	done    *atomic.Bool
+	ptr      C.soxr_t
+	srcRate  int
+	dstRate  int
+	channels int
+	maxIn    int
+	done     *atomic.Bool
 }
 
 func soxrErr(e C.soxr_error_t) error {
@@ -178,12 +143,12 @@ func soxrErr(e C.soxr_error_t) error {
 	return errors.New(estr)
 }
 
-func newSoxr(dstRate, srcRate int, quality int) (*soxrResampler, error) {
+func newSoxr(dstRate, srcRate, channels int, quality int) (*soxrResampler, error) {
 	ic := C.soxr_io_spec(C.SOXR_INT16_I, C.SOXR_INT16_I)
 	qc := C.soxr_quality_spec(C.ulong(quality), 0)
 	rc := C.soxr_runtime_spec(1) // 1 thread
 	var e C.soxr_error_t
-	p := C.soxr_create(C.double(srcRate), C.double(dstRate), 1, &e, &ic, &qc, &rc)
+	p := C.soxr_create(C.double(srcRate), C.double(dstRate), C.uint(channels), &e, &ic, &qc, &rc)
 	err := soxrErr(e)
 	if err != nil {
 		return nil, err
@@ -192,10 +157,11 @@ func newSoxr(dstRate, srcRate int, quality int) (*soxrResampler, error) {
 	// This variable helps avoid double-free on the soxr resampler ptr. See soxrCleanup.
 	done := new(atomic.Bool)
 	r := &soxrResampler{
-		ptr:     p,
-		dstRate: dstRate,
-		srcRate: srcRate,
-		done:    done,
+		ptr:      p,
+		dstRate:  dstRate,
+		srcRate:  srcRate,
+		channels: channels,
+		done:     done,
 	}
 	runtime.AddCleanup(r, func(p C.soxr_t) {
 		soxrCleanup(done, p)
@@ -218,47 +184,38 @@ func (r *soxrResampler) Close() error {
 	return nil
 }
 
-func (r *soxrResampler) Resample(out PCM16Sample, in PCM16Sample) (PCM16Sample, int, error) {
+func (r *soxrResampler) Resample(out PCM16Sample, in PCM16Sample) (PCM16Sample, error) {
 	if r.ptr == nil || r.done.Load() {
-		return out, 0, errors.New("resampler is closed")
+		return out, errResamplerClosed
 	}
-	r.maxIn = max(r.maxIn, len(in))
-	dstN := (len(in) * r.dstRate) / r.srcRate
-	if dstN == 0 {
-		dstN = max(
-			(r.maxIn*r.dstRate)/r.srcRate,
-			cap(out)-len(out),
-			1024,
-		)
+	// soxr counts interleaved frames, not samples.
+	ch := r.channels
+	frames := len(in) / ch
+	var src C.soxr_in_t
+	var dstN int
+	switch {
+	case len(in) == 0:
+		dstN = max(r.maxIn*r.dstRate/r.srcRate, (cap(out)-len(out))/ch, 1024)
+	case frames == 0:
+		return out, nil
+	default:
+		r.maxIn = max(r.maxIn, frames)
+		src = C.soxr_in_t(unsafe.Pointer(&in[0]))
+		// soxr reads at most ceil(olen*srcRate/dstRate) frames per call, so round up to take them all.
+		dstN = (frames*r.dstRate + r.srcRate - 1) / r.srcRate
 	}
-	// Make sure output has space for new samples. Length is still unchanged.
-	out = slices.Grow(out, dstN)
-	// Slice for the unused capacity, which we will write into.
-	dst := out[len(out) : len(out)+dstN]
-	total := 0
-	// Always call at least once (for flush to work), thus not considering len(in) here.
-	for len(dst) > 0 {
+	for {
+		out = slices.Grow(out, dstN*ch)
+		dst := out[len(out) : len(out)+dstN*ch]
 		var read, done C.size_t
-		var e C.soxr_error_t
-		if len(in) != 0 {
-			e = C.soxr_process(r.ptr, C.soxr_in_t(unsafe.Pointer(&in[0])), C.size_t(len(in)), &read, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(len(dst)), &done)
-		} else {
-			// Flush, no input.
-			e = C.soxr_process(r.ptr, nil, 0, nil, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(len(dst)), &done)
-			read = 0
+		e := C.soxr_process(r.ptr, src, C.size_t(frames), &read, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(dstN), &done)
+		if err := soxrErr(e); err != nil {
+			return out, err
 		}
-		err := soxrErr(e)
-		if err != nil {
-			return out, 0, err
-		}
-		total += int(done)
-		dst = dst[done:]
-		in = in[read:]
-		if len(in) == 0 {
-			break
+		out = out[:len(out)+int(done)*ch]
+		// A flush can hold more output than one call takes, so it repeats until soxr comes up short.
+		if src != nil || int(done) < dstN {
+			return out, nil
 		}
 	}
-	// Finally adjust the length to cover written data.
-	out = out[:len(out)+total]
-	return out, total, nil
 }
