@@ -92,10 +92,8 @@ func TestResample(t *testing.T) {
 			Buffer: 1,
 		},
 		{
-			Rate: 8000, Skip: 2,
+			Rate: 8000, Skip: 1,
 			Buffer: 3,
-			// TODO: figure out why resampler delays that specific frame; silence?
-			Bumps: []int{211},
 		},
 	} {
 		t.Run(strconv.Itoa(c.Rate), func(t *testing.T) {
