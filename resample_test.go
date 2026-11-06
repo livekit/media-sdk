@@ -83,6 +83,8 @@ func TestResample(t *testing.T) {
 	gotSrc := writePCM16s(t, srcFile, srcFrames)
 	writePCM16sWebm(t, srcFileWebm, srcRate, srcFrames)
 	require.True(t, gotSrc == "c774af95" || gotSrc == "b04a6a1f")
+	// Output chunks follow each write's size, so the file's short last frame would split the held-back frame.
+	srcFrames = srcFrames[:len(srcFrames)-1]
 
 	for _, c := range []struct {
 		Rate   int
@@ -126,7 +128,8 @@ func TestResample(t *testing.T) {
 
 			writePCM16sWebm(t, resFileWebm, c.Rate, dstFrames)
 
-			expSamples := totalSamples / (srcRate / c.Rate)
+			// soxr rounds the fractional last output frame to the nearest one.
+			expSamples := (totalSamples*c.Rate + srcRate/2) / srcRate
 			require.Equal(t, expSamples, pw.samples)
 			require.Equal(t, len(srcFrames), len(pw.frameT))
 			// Tick at which the first frame was received.
@@ -170,8 +173,8 @@ func TestResampleStereoKeepsChannels(t *testing.T) {
 		src := stereoTone(srcRate, frames*frameLen)
 		for _, predictable := range []bool{false, true} {
 			opts := []media.ResampleOption{media.WithResampleChannels(2), media.WithPredictableResample(predictable)}
-			run := map[string]func() media.PCM16Sample{
-				"writer": func() media.PCM16Sample {
+			run := map[string]func(t *testing.T) media.PCM16Sample{
+				"writer": func(t *testing.T) media.PCM16Sample {
 					var out media.PCM16Sample
 					w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, dstRate), srcRate, opts...)
 					for f := range frames {
@@ -180,17 +183,29 @@ func TestResampleStereoKeepsChannels(t *testing.T) {
 					require.NoError(t, w.Close())
 					return out
 				},
-				"buffer": func() media.PCM16Sample {
+				"buffer": func(t *testing.T) media.PCM16Sample {
 					return media.Resample(nil, dstRate, src, srcRate, opts...)
 				},
 			}
 			for api, resample := range run {
 				t.Run(fmt.Sprintf("%d-%d/predictable=%v/%s", srcRate, dstRate, predictable, api), func(t *testing.T) {
-					requireChannelsKept(t, resample(), dstRate)
+					requireChannelsKept(t, resample(t), dstRate)
 				})
 			}
 		}
 	}
+}
+
+func TestSwitchWriterResampleKeepsChannels(t *testing.T) {
+	const srcRate, dstRate = 48000, 16000
+	var out media.PCM16Sample
+	sw := media.NewSwitchWriter(srcRate, media.WithResampleChannels(2))
+	sw.Swap(media.NewPCM16BufferWriter(&out, dstRate))
+	for chunk := range slices.Chunk(stereoTone(srcRate, srcRate), 2*srcRate/media.DefFramesPerSec) {
+		require.NoError(t, sw.WriteSample(chunk))
+	}
+	require.NoError(t, sw.Close())
+	requireChannelsKept(t, out, dstRate)
 }
 
 func TestResampleStereoPartialFrame(t *testing.T) {
@@ -272,20 +287,20 @@ func TestResampleStereoChunksHoldWholeFrames(t *testing.T) {
 
 // Two frames at 3:1 resample to zero output frames, which takes soxr's fallback output size.
 func TestResampleStereoTinyWrite(t *testing.T) {
-	var out media.PCM16Sample
-	w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, 16000), 48000, media.WithResampleChannels(2))
-	require.NoError(t, w.WriteSample(make(media.PCM16Sample, 4)))
-	require.NoError(t, w.Close())
-}
-
-func TestResampleOptionsKeepDefaults(t *testing.T) {
-	old := media.DefaultResampleOptions
-	t.Cleanup(func() { media.DefaultResampleOptions = old })
-	media.DefaultResampleOptions = []media.ResampleOption{media.WithPredictableResample(true)}
-	newWriter := func(opts ...media.ResampleOption) media.PCM16Writer {
-		return media.ResampleWriter(media.NewPCM16BufferWriter(new(media.PCM16Sample), 16000), 48000, opts...)
+	for _, predictable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
+			var out media.PCM16Sample
+			w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, 16000), 48000,
+				media.WithResampleChannels(2), media.WithPredictableResample(predictable))
+			var writeErr, closeErr error
+			requireReturns(t, func() {
+				writeErr = w.WriteSample(make(media.PCM16Sample, 4))
+				closeErr = w.Close()
+			})
+			require.NoError(t, writeErr)
+			require.NoError(t, closeErr)
+		})
 	}
-	require.IsType(t, newWriter(), newWriter(media.WithResampleChannels(2)), "the channels option dropped the defaults")
 }
 
 func TestResampleRejectsChannelsBelowOne(t *testing.T) {
@@ -307,6 +322,7 @@ func stereoTone(rate, frames int) media.PCM16Sample {
 func requireChannelsKept(t *testing.T, out media.PCM16Sample, rate int) {
 	t.Helper()
 	require.Zero(t, len(out)%2)
+	require.Greater(t, len(out)/2, rate/media.DefFramesPerSec, "output frames")
 	var l, r []float64
 	for i := 0; i < len(out); i += 2 {
 		l = append(l, float64(out[i]))

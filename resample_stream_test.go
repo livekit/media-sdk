@@ -31,6 +31,8 @@ func TestResampleWriterKeepsAllInput(t *testing.T) {
 	}{
 		{16000, 8000, 441},
 		{48000, 16000, 961},
+		{8000, 48000, 160},
+		{11025, 48000, 220},
 	}
 	const writes = 200
 	for _, c := range cases {
@@ -50,6 +52,88 @@ func TestResampleWriterKeepsAllInput(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// A writer that falls behind adds delay for the rest of the call. After the first second, the lag may
+// exceed its warm-up peak only by the one frame that whole-frame output can hold back.
+func TestResampleWriterKeepsUp(t *testing.T) {
+	const srcRate, dstRate, writeFrames, writes = 11025, 8000, 221, 2000
+	dstFrame := writeFrames * dstRate / srcRate
+	for _, predictable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
+			var out media.PCM16Sample
+			w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, dstRate), srcRate, media.WithPredictableResample(predictable))
+			warmupLag := 0
+			for i := range writes {
+				require.NoError(t, w.WriteSample(make(media.PCM16Sample, writeFrames)))
+				lag := (i+1)*writeFrames*dstRate/srcRate - len(out)
+				if i < media.DefFramesPerSec {
+					warmupLag = max(warmupLag, lag)
+					continue
+				}
+				require.LessOrEqual(t, lag, warmupLag+dstFrame, "write %d", i)
+			}
+			require.NoError(t, w.Close())
+		})
+	}
+}
+
+// Encoders downstream take exact frame sizes, so every chunk but the last must match the write's duration.
+func TestResampleWriterChunksMatchWrites(t *testing.T) {
+	cases := []struct {
+		srcRate, dstRate, writeFrames int
+	}{
+		{44100, 48000, 441},
+		{16000, 48000, 320},
+	}
+	const writes = 100
+	for _, c := range cases {
+		for _, predictable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d-%d/predictable=%v", c.srcRate, c.dstRate, predictable), func(t *testing.T) {
+				var chunks []media.PCM16Sample
+				w := media.ResampleWriter(media.NewPCM16FrameWriter(&chunks, c.dstRate), c.srcRate,
+					media.WithPredictableResample(predictable))
+				for range writes {
+					require.NoError(t, w.WriteSample(make(media.PCM16Sample, c.writeFrames)))
+				}
+				require.NoError(t, w.Close())
+				require.Greater(t, len(chunks), 1)
+				dstFrame := c.writeFrames * c.dstRate / c.srcRate
+				for i, chunk := range chunks[:len(chunks)-1] {
+					require.Equal(t, dstFrame, len(chunk), "chunk %d of %d", i, len(chunks))
+				}
+			})
+		}
+	}
+}
+
+// One long write, such as a long-ptime packet, must not set the chunk size, and with it the delay, for the rest of the call.
+func TestResampleWriterChunksFollowLatestWrite(t *testing.T) {
+	const srcRate, dstRate = 48000, 8000
+	frame := srcRate / media.DefFramesPerSec
+	for _, predictable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
+			var chunks []media.PCM16Sample
+			w := media.ResampleWriter(media.NewPCM16FrameWriter(&chunks, dstRate), srcRate, media.WithPredictableResample(predictable))
+			require.NoError(t, w.WriteSample(make(media.PCM16Sample, srcRate)))
+			for range media.DefFramesPerSec {
+				require.NoError(t, w.WriteSample(make(media.PCM16Sample, frame)))
+			}
+			require.Len(t, chunks[len(chunks)-1], frame*dstRate/srcRate)
+			require.NoError(t, w.Close())
+		})
+	}
+}
+
+func TestResampleWriterRejectsUseAfterClose(t *testing.T) {
+	for _, predictable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
+			w := media.ResampleWriter(media.NewPCM16BufferWriter(new(media.PCM16Sample), 16000), 48000, media.WithPredictableResample(predictable))
+			require.NoError(t, w.Close())
+			require.Error(t, w.WriteSample(make(media.PCM16Sample, 960)))
+			require.Error(t, w.Close())
+		})
 	}
 }
 

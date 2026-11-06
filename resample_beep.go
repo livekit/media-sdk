@@ -14,23 +14,22 @@
 
 package media
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"slices"
+)
 
 const beepQuality = 3
 
 func resampleBufferBeep(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int, opts *resampleOptions) PCM16Sample {
-	r := beepResample(beepQuality, srcSampleRate, dstSampleRate, opts.Channels, NewPCM16BufferReader(src))
-	sz := 0
-	if dstSampleRate < srcSampleRate {
-		div := srcSampleRate / dstSampleRate
-		sz = len(src) / div
-	} else {
-		mul := dstSampleRate / srcSampleRate
-		sz = len(src) * mul
+	w := newResampleWriterBeep(NewPCM16BufferWriter(&dst, dstSampleRate), srcSampleRate, opts)
+	err := w.WriteSample(src)
+	_ = w.Close()
+	if err != nil {
+		panic(err)
 	}
-	out := make(PCM16Sample, sz)
-	n, _ := r.Stream(out)
-	return append(dst, out[:n]...)
+	return dst
 }
 
 func newResampleWriterBeep(w WriteCloser[PCM16Sample], sampleRate int, opts *resampleOptions) WriteCloser[PCM16Sample] {
@@ -51,7 +50,7 @@ type resampleWriterBeep struct {
 	inbuf   PCM16Sample
 	srcRate int
 	dstRate int
-	buf     PCM16Sample
+	out     frameBuffer
 }
 
 func (w *resampleWriterBeep) String() string {
@@ -63,28 +62,39 @@ func (w *resampleWriterBeep) SampleRate() int {
 }
 
 func (w *resampleWriterBeep) Close() error {
-	return w.w.Close()
+	if w.r.srcEnded {
+		return errResamplerClosed
+	}
+	w.r.srcEnded = true
+	w.stream()
+	err := w.out.flush(w.w, 0)
+	return errors.Join(err, partialFrameErr(len(w.inbuf)), w.w.Close())
 }
 
 func (w *resampleWriterBeep) ReadSample(data PCM16Sample) (int, error) {
-	n := copy(data, w.inbuf)
+	n := copy(data, w.inbuf[:len(w.inbuf)-len(w.inbuf)%w.r.ch])
 	w.inbuf = w.inbuf[n:]
 	return n, nil
 }
 
 func (w *resampleWriterBeep) WriteSample(data PCM16Sample) error {
+	if w.r.srcEnded {
+		return errResamplerClosed
+	}
 	w.inbuf = append(w.inbuf, data...)
-	var sz int
-	if w.srcRate > w.dstRate {
-		sz = len(data) / (w.srcRate / w.dstRate)
-	} else {
-		sz = len(data) * (w.dstRate / w.srcRate)
+	w.out.dstFrame = resampleSize(w.dstRate, w.srcRate, len(data)/w.r.ch) * w.r.ch
+	w.stream()
+	return w.out.flush(w.w, w.out.dstFrame)
+}
+
+func (w *resampleWriterBeep) stream() {
+	sz := max(w.out.dstFrame, w.r.ch)
+	for {
+		buf := slices.Grow(w.out.buf, sz)
+		n, _ := w.r.Stream(buf[len(buf) : len(buf)+sz])
+		w.out.buf = buf[:len(buf)+n]
+		if n < sz {
+			return
+		}
 	}
-	if cap(w.buf) < sz {
-		w.buf = make(PCM16Sample, sz)
-	} else {
-		w.buf = w.buf[:sz]
-	}
-	n, _ := w.r.Stream(w.buf)
-	return w.w.WriteSample(w.buf[:n])
 }

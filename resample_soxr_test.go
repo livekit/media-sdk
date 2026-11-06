@@ -19,6 +19,8 @@ package media
 import (
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // The writer only passes whole frames, so this calls soxr directly with less than one.
@@ -29,11 +31,20 @@ func TestSoxrReturnsOnPartialFrame(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _, _ = w.r.Resample(nil, PCM16Sample{0})
+		_, _ = w.r.Resample(nil, PCM16Sample{0})
 	}()
 	select {
 	case <-done:
 	case <-time.After(hangGuard):
 		t.Fatal("soxr spun on a partial frame")
 	}
+}
+
+// Explicit options layer over the defaults, so a channels option keeps sip's predictable default.
+func TestResampleOptionsKeepDefaults(t *testing.T) {
+	old := DefaultResampleOptions
+	t.Cleanup(func() { DefaultResampleOptions = old })
+	DefaultResampleOptions = []ResampleOption{WithPredictableResample(true)}
+	w := ResampleWriter(NewPCM16BufferWriter(new(PCM16Sample), 16000), 48000, WithResampleChannels(2))
+	require.IsType(t, (*resampleWriterBeep)(nil), w, "the channels option dropped the defaults")
 }

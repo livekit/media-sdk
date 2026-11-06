@@ -33,17 +33,6 @@ import (
 	"unsafe"
 )
 
-func resampleSize(dstSampleRate, srcSampleRate int, srcSize int) int {
-	if dstSampleRate < srcSampleRate {
-		div := srcSampleRate / dstSampleRate
-		sz := srcSize / div
-		return sz
-	}
-	mul := dstSampleRate / srcSampleRate
-	sz := srcSize * mul
-	return sz
-}
-
 func resampleBuffer(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate int, opts *resampleOptions) PCM16Sample {
 	w := newResampleWriter(NewPCM16BufferWriter(&dst, dstSampleRate), srcSampleRate, opts)
 	err := w.WriteSample(src)
@@ -61,7 +50,6 @@ func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int, opts *resampl
 		w:       w,
 		srcRate: srcRate,
 		dstRate: dstRate,
-		buffer:  0, // set larger buffer for better resampler quality (see below)
 	}
 	quality := int(C.SOXR_LQ)
 	var err error
@@ -73,17 +61,12 @@ func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int, opts *resampl
 }
 
 type resampleWriter struct {
-	mu       sync.Mutex
-	w        WriteCloser[PCM16Sample]
-	r        *soxrResampler
-	srcRate  int
-	dstRate  int
-	dstFrame int
-
-	// The resampler could actually consume multiple full frames and emit just one.
-	// This variable controls how many full frames we intentionally keep. Useful for higher resampler quality.
-	buffer int
-	buf    PCM16Sample
+	mu      sync.Mutex
+	w       WriteCloser[PCM16Sample]
+	r       *soxrResampler
+	srcRate int
+	dstRate int
+	out     frameBuffer
 	// soxr takes whole frames, so a write ending mid-frame leaves its tail here for the next write.
 	partial PCM16Sample
 }
@@ -101,42 +84,15 @@ func (w *resampleWriter) Close() error {
 	defer w.mu.Unlock()
 	// Flush soxr buffer to our buffer.
 	var err error
-	w.buf, _, err = w.r.Resample(w.buf, nil)
+	w.out.buf, err = w.r.Resample(w.out.buf, nil)
 	if err != nil {
 		return err
 	}
 	// Close soxr resampler.
 	_ = w.r.Close()
 	// Flush our own PCM frame buffer to the underlying writer.
-	_ = w.flush(0)
-	err2 := w.w.Close()
-	if err2 != nil {
-		err = err2
-	}
-	return err
-}
-
-func (w *resampleWriter) flush(minSize int) error {
-	if len(w.buf) == 0 {
-		return nil
-	}
-	frame := w.dstFrame
-	if frame == 0 {
-		frame = len(w.buf)
-	}
-	var last error
-	for len(w.buf) > 0 && len(w.buf) >= minSize {
-		sz := frame
-		if sz > len(w.buf) {
-			sz = len(w.buf)
-		}
-		if err := w.w.WriteSample(w.buf[:sz]); err != nil {
-			last = err
-		}
-		n := copy(w.buf, w.buf[sz:])
-		w.buf = w.buf[:n]
-	}
-	return last
+	_ = w.out.flush(w.w, 0)
+	return errors.Join(partialFrameErr(len(w.partial)), w.w.Close())
 }
 
 func (w *resampleWriter) WriteSample(data PCM16Sample) error {
@@ -154,16 +110,15 @@ func (w *resampleWriter) WriteSample(data PCM16Sample) error {
 	}
 	var err error
 	// Write input to the resampler buffer.
-	w.buf, _, err = w.r.Resample(w.buf, data)
+	w.out.buf, err = w.r.Resample(w.out.buf, data)
 	if err != nil {
 		return err
 	}
 	// Resampler will likely return a short buffer in the first run. In that case, we emit no samples on the first call.
 	// This will cause a one frame delay for each resampler. Flushing the sampler, however will lead to frame
 	// discontinuity, and thus - distortions on the frame boundaries.
-	dstFrame := resampleSize(w.dstRate, w.srcRate, len(data)/ch) * ch
-	w.dstFrame = max(w.dstFrame, dstFrame)
-	return w.flush(w.dstFrame * (1 + w.buffer))
+	w.out.dstFrame = resampleSize(w.dstRate, w.srcRate, len(data)/ch) * ch
+	return w.out.flush(w.w, w.out.dstFrame)
 }
 
 type soxrResampler struct {
@@ -229,49 +184,38 @@ func (r *soxrResampler) Close() error {
 	return nil
 }
 
-func (r *soxrResampler) Resample(out PCM16Sample, in PCM16Sample) (PCM16Sample, int, error) {
+func (r *soxrResampler) Resample(out PCM16Sample, in PCM16Sample) (PCM16Sample, error) {
 	if r.ptr == nil || r.done.Load() {
-		return out, 0, errors.New("resampler is closed")
+		return out, errResamplerClosed
 	}
 	// soxr counts interleaved frames, not samples.
 	ch := r.channels
-	r.maxIn = max(r.maxIn, len(in)/ch)
-	dstN := (len(in) / ch * r.dstRate) / r.srcRate
-	if dstN == 0 {
-		dstN = max(
-			(r.maxIn*r.dstRate)/r.srcRate,
-			(cap(out)-len(out))/ch,
-			1024,
-		)
+	frames := len(in) / ch
+	var src C.soxr_in_t
+	var dstN int
+	switch {
+	case len(in) == 0:
+		dstN = max(r.maxIn*r.dstRate/r.srcRate, (cap(out)-len(out))/ch, 1024)
+	case frames == 0:
+		return out, nil
+	default:
+		r.maxIn = max(r.maxIn, frames)
+		src = C.soxr_in_t(unsafe.Pointer(&in[0]))
+		// soxr reads at most ceil(olen*srcRate/dstRate) frames per call, so round up to take them all.
+		dstN = (frames*r.dstRate + r.srcRate - 1) / r.srcRate
 	}
-	// Make sure output has space for new samples. Length is still unchanged.
-	out = slices.Grow(out, dstN*ch)
-	// Slice for the unused capacity, which we will write into.
-	dst := out[len(out) : len(out)+dstN*ch]
-	total := 0
-	// Always call at least once (for flush to work), thus not considering len(in) here.
-	for len(dst) > 0 {
+	for {
+		out = slices.Grow(out, dstN*ch)
+		dst := out[len(out) : len(out)+dstN*ch]
 		var read, done C.size_t
-		var e C.soxr_error_t
-		if len(in) != 0 {
-			e = C.soxr_process(r.ptr, C.soxr_in_t(unsafe.Pointer(&in[0])), C.size_t(len(in)/ch), &read, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(len(dst)/ch), &done)
-		} else {
-			// Flush, no input.
-			e = C.soxr_process(r.ptr, nil, 0, nil, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(len(dst)/ch), &done)
-			read = 0
+		e := C.soxr_process(r.ptr, src, C.size_t(frames), &read, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(dstN), &done)
+		if err := soxrErr(e); err != nil {
+			return out, err
 		}
-		err := soxrErr(e)
-		if err != nil {
-			return out, 0, err
-		}
-		total += int(done) * ch
-		dst = dst[int(done)*ch:]
-		in = in[int(read)*ch:]
-		if len(in) == 0 || (read == 0 && done == 0) {
-			break
+		out = out[:len(out)+int(done)*ch]
+		// A flush can hold more output than one call takes, so it repeats until soxr comes up short.
+		if src != nil || int(done) < dstN {
+			return out, nil
 		}
 	}
-	// Finally adjust the length to cover written data.
-	out = out[:len(out)+total]
-	return out, total, nil
 }

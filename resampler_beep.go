@@ -76,15 +76,15 @@ func beepResampleRatio(quality int, ratio float64, channels int, s Reader[PCM16S
 		panic(fmt.Errorf("resample: invalid ratio: %f", ratio))
 	}
 	return &beepResampler{
-		s:     s,
-		ch:    channels,
-		ratio: ratio,
-		first: true,
-		buf1:  make(PCM16Sample, 512*channels),
-		buf2:  make(PCM16Sample, 512*channels),
-		pts:   make([]point, quality*2),
-		off:   0,
-		pos:   0,
+		s:       s,
+		ch:      channels,
+		ratio:   ratio,
+		first:   true,
+		buf1:    make(PCM16Sample, 512*channels),
+		buf2:    make(PCM16Sample, 512*channels),
+		weights: make([]float64, quality*2),
+		off:     0,
+		pos:     0,
 	}
 }
 
@@ -97,12 +97,14 @@ type beepResampler struct {
 	ratio      float64             // old sample rate / new sample rate
 	first      bool                // true when Stream was not called before
 	buf1, buf2 PCM16Sample         // buf1 contains previous buf2, new data goes into buf2, buf1 is because interpolation might require old samples
-	pts        []point             // pts is for points used for interpolation
+	srcEnded   bool                // set by the owner once s will return no more data
 	off        int                 // off is the position of the start of buf2 in the original data
 	pos        int                 // pos is the current position in the resampled data
+	weights    []float64
 }
 
 // Stream streams the original audio resampled according to the current ratio.
+// Until srcEnded is set, it stops short rather than read missing input as silence.
 func (r *beepResampler) Stream(samples PCM16Sample) (n int, ok bool) {
 	// if it's the first time, we need to fill buf2 with initial data, buf1 remains zeroed
 	if r.first {
@@ -112,46 +114,34 @@ func (r *beepResampler) Stream(samples PCM16Sample) (n int, ok bool) {
 	}
 	ch := r.ch
 	for len(samples) >= ch {
-	again:
 		// calculate the current position in the original data
 		j := float64(r.pos) * r.ratio
-
-		for c := range ch {
-			// find quality*2 closest samples to j and translate them to points for interpolation
-			for pi := range r.pts {
-				// calculate the index of one of the closest samples
-				k := int(j) + pi - len(r.pts)/2 + 1
-
-				var y int16
-				switch {
-				// the sample is in buf1
-				case k < r.off:
-					y = r.buf1[len(r.buf1)+(k-r.off)*ch+c]
-				// the sample is in buf2
-				case k < r.off+len(r.buf2)/ch:
-					y = r.buf2[(k-r.off)*ch+c]
-				// the sample is beyond buf2, so we need to load new data
-				case k >= r.off+len(r.buf2)/ch:
-					if r.load() {
-						goto again
-					}
-					// this condition happens when the original Streamer got
-					// drained and j is after the end of the
-					// original data
-					if int(j) >= r.off+len(r.buf2)/ch {
-						return n, n > 0
-					}
-					// the original Streamer got drained and this one of the
-					// closest samples is after the end of the original data
-					y = 0
+		lo := int(j) - len(r.weights)/2 + 1
+		hi := lo + len(r.weights) - 1
+		for hi >= r.end() && r.load() {
+		}
+		if hi >= r.end() && !r.srcEnded {
+			return n, n > 0
+		}
+		if int(j) >= r.end() {
+			return n, n > 0
+		}
+		for i := range r.weights {
+			l := 1.0
+			for m := range r.weights {
+				if i == m {
+					continue
 				}
-
-				r.pts[pi] = point{float64(k), float64(y) / 0x7fff}
+				l *= (j - float64(lo+m)) / float64(i-m)
 			}
-
-			// calculate the resampled sample using polynomial interpolation from the
-			// quality*2 closest samples
-			samples[c] = int16(lagrange(r.pts, j) * 0x7fff)
+			r.weights[i] = l
+		}
+		for c := range ch {
+			y := 0.0
+			for i, l := range r.weights {
+				y += r.at(lo+i, c) * l
+			}
+			samples[c] = int16(min(max(y*0x7fff, math.MinInt16), math.MaxInt16))
 		}
 		samples = samples[ch:]
 		n += ch
@@ -160,8 +150,23 @@ func (r *beepResampler) Stream(samples PCM16Sample) (n int, ok bool) {
 	return n, true
 }
 
+func (r *beepResampler) end() int {
+	return r.off + len(r.buf2)/r.ch
+}
+
+func (r *beepResampler) at(k, c int) float64 {
+	var y int16
+	switch {
+	case k < r.off:
+		y = r.buf1[len(r.buf1)+(k-r.off)*r.ch+c]
+	case k < r.end():
+		y = r.buf2[(k-r.off)*r.ch+c]
+	}
+	return float64(y) / 0x7fff
+}
+
 // Swapping in a short buf2 would leave buf1 too few frames of history, so buf2 fills to capacity
-// first. A partial frame stays at the end of buf2 until the next read completes it.
+// first.
 func (r *beepResampler) load() bool {
 	if len(r.buf2) < cap(r.buf2) {
 		sn, _ := r.s.ReadSample(r.buf2[len(r.buf2):cap(r.buf2)])
@@ -189,25 +194,4 @@ func (r *beepResampler) SetRatio(ratio float64) {
 	}
 	r.pos = int(float64(r.pos) * r.ratio / ratio)
 	r.ratio = ratio
-}
-
-// lagrange calculates the value at x of a polynomial of order len(pts)+1 which goes through all
-// points in pts
-func lagrange(pts []point, x float64) (y float64) {
-	y = 0.0
-	for j := range pts {
-		l := 1.0
-		for m := range pts {
-			if j == m {
-				continue
-			}
-			l *= (x - pts[m].X) / (pts[j].X - pts[m].X)
-		}
-		y += pts[j].Y * l
-	}
-	return y
-}
-
-type point struct {
-	X, Y float64
 }

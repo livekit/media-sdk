@@ -15,6 +15,7 @@
 package media
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -38,6 +39,44 @@ func Resample(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate
 		return resampleBufferBeep(dst, dstSampleRate, src, srcSampleRate, &opt)
 	}
 	return resampleBuffer(dst, dstSampleRate, src, srcSampleRate, &opt)
+}
+
+func resampleSize(dstSampleRate, srcSampleRate int, srcSize int) int {
+	return srcSize * dstSampleRate / srcSampleRate
+}
+
+func partialFrameErr(samples int) error {
+	if samples == 0 {
+		return nil
+	}
+	return fmt.Errorf("resample: input ended mid-frame, dropping %d samples", samples)
+}
+
+var errResamplerClosed = errors.New("resampler is closed")
+
+// Encoders downstream need exact frame sizes, so output leaves in chunks of the latest write's
+// output size, and a remainder waits for the next write.
+type frameBuffer struct {
+	buf      PCM16Sample
+	dstFrame int
+}
+
+func (b *frameBuffer) flush(w PCM16Writer, minSize int) error {
+	frame := b.dstFrame
+	if frame == 0 {
+		frame = len(b.buf)
+	}
+	var last error
+	rest := b.buf
+	for len(rest) > 0 && len(rest) >= minSize {
+		sz := min(frame, len(rest))
+		if err := w.WriteSample(rest[:sz]); err != nil {
+			last = err
+		}
+		rest = rest[sz:]
+	}
+	b.buf = b.buf[:copy(b.buf, rest)]
+	return last
 }
 
 type ResampleOption func(opts *resampleOptions)
