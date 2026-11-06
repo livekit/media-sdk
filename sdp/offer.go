@@ -851,18 +851,35 @@ type AudioConfig struct {
 	DTMF *CodecInfo
 }
 
+// findDTMF returns an index of telephone-event codec with a given RTP clock rate, or -1 if there's none.
+func findDTMF(desc MediaDesc, rate int) int {
+	return slices.IndexFunc(desc.Data, func(d CodecInfo) bool {
+		return d.Info.Name == dtmf.SDPNameOnly && d.Info.RTPClockRate == rate
+	})
+}
+
 func SelectAudio(desc MediaDesc, answer bool) (*AudioConfig, error) {
-	var (
-		priority   int
-		audioCodec *CodecInfo
-	)
-	for _, c := range desc.Audio {
-		if audioCodec == nil || c.Info.Priority > priority {
-			audioCodec = &c
-			priority = c.Info.Priority
+	var audioCodec *CodecInfo
+	if answer {
+		// The remote side picked the codec and may already send it. We decode a single codec only,
+		// so we must use the first one, even if it has no telephone-event at the same clock rate.
+		if len(desc.Audio) != 0 {
+			audioCodec = &desc.Audio[0]
 		}
-		if answer {
-			break
+	} else {
+		// We pick the codec with the highest priority, but prefer the ones that have telephone-event
+		// at the same RTP clock rate. Some peers handle DTMF on a different clock than the audio
+		// on the same RTP stream poorly (e.g. AMR-WB with telephone-event/8000), duplicating or losing digits.
+		var (
+			priority  int
+			dtmfMatch bool
+		)
+		for i := range desc.Audio {
+			c := &desc.Audio[i]
+			match := findDTMF(desc, c.Info.RTPClockRate) >= 0
+			if audioCodec == nil || (match && !dtmfMatch) || (match == dtmfMatch && c.Info.Priority > priority) {
+				audioCodec, priority, dtmfMatch = c, c.Info.Priority, match
+			}
 		}
 	}
 	if audioCodec == nil {
@@ -871,9 +888,7 @@ func SelectAudio(desc MediaDesc, answer bool) (*AudioConfig, error) {
 	a := &AudioConfig{
 		CodecInfo: *audioCodec,
 	}
-	di := slices.IndexFunc(desc.Data, func(d CodecInfo) bool {
-		return d.Info.Name == dtmf.SDPNameOnly && d.Info.RTPClockRate == a.Info.RTPClockRate
-	})
+	di := findDTMF(desc, a.Info.RTPClockRate)
 	if di < 0 {
 		maxRate := -1
 		for i, d := range desc.Data {

@@ -637,6 +637,68 @@ func TestSDPMediaAnswer(t *testing.T) {
 	})
 }
 
+func TestSelectAudioDTMFRate(t *testing.T) {
+	g := media.NewCodecSet()
+	g.SetEnabledMap(map[string]bool{
+		amrwb.SDPNameOnly:    true,
+		g722.SDPNameOnly:     true,
+		g711.ULawSDPNameOnly: true,
+		dtmf.SDPNameOnly:     true,
+	})
+	cases := []struct {
+		name   string
+		answer bool // selecting from the remote answer, instead of answering the remote offer
+		codecs []string
+		exp    string // audio codec and DTMF clock rate
+	}{
+		{
+			name:   "prefer matching rate",
+			codecs: []string{"96 AMR-WB/16000", "9 G722/8000", "0 PCMU/8000", "101 telephone-event/8000"},
+			exp:    "G722/8000 + DTMF/8000",
+		},
+		{
+			name:   "matching rate for preferred codec",
+			codecs: []string{"0 PCMU/8000", "96 AMR-WB/16000", "101 telephone-event/8000", "102 telephone-event/16000"},
+			exp:    "AMR-WB/16000 + DTMF/16000",
+		},
+		{
+			name:   "no matching rate",
+			codecs: []string{"96 AMR-WB/16000", "101 telephone-event/8000"},
+			exp:    "AMR-WB/16000 + DTMF/8000",
+		},
+		{
+			name:   "no dtmf",
+			codecs: []string{"0 PCMU/8000", "96 AMR-WB/16000"},
+			exp:    "AMR-WB/16000",
+		},
+		{
+			name:   "answer uses first codec",
+			answer: true,
+			codecs: []string{"96 AMR-WB/16000", "9 G722/8000", "101 telephone-event/8000"},
+			exp:    "AMR-WB/16000 + DTMF/8000",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			desc := sdp.MediaDescription{MediaName: sdp.MediaName{Media: "audio"}}
+			for _, codec := range c.codecs {
+				typ, _, _ := strings.Cut(codec, " ")
+				desc.MediaName.Formats = append(desc.MediaName.Formats, typ)
+				desc.Attributes = append(desc.Attributes, sdp.Attribute{Key: "rtpmap", Value: codec})
+			}
+			m, err := ParseMediaWith(g, &desc)
+			require.NoError(t, err)
+			a, err := SelectAudio(*m, c.answer)
+			require.NoError(t, err)
+			got := a.Info.SDPFullName()
+			if a.DTMF != nil {
+				got += fmt.Sprintf(" + DTMF/%d", a.DTMF.Info.RTPClockRate)
+			}
+			require.Equal(t, c.exp, got)
+		})
+	}
+}
+
 func TestSDPMediaAnswerOneDisabled(t *testing.T) {
 	g := media.GlobalCodecs()
 
