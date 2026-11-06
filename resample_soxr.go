@@ -182,6 +182,9 @@ func newSoxr(dstRate, srcRate int, quality int) (*soxrResampler, error) {
 	ic := C.soxr_io_spec(C.SOXR_INT16_I, C.SOXR_INT16_I)
 	qc := C.soxr_quality_spec(C.ulong(quality), 0)
 	rc := C.soxr_runtime_spec(1) // 1 thread
+	// The default 1024-point minimum DFT holds back about 55 ms at 8k->48k on 20 ms writes;
+	// 512 points halves that with the same filter.
+	rc.log2_min_dft_size = 9
 	var e C.soxr_error_t
 	p := C.soxr_create(C.double(srcRate), C.double(dstRate), 1, &e, &ic, &qc, &rc)
 	err := soxrErr(e)
