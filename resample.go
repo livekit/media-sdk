@@ -41,10 +41,6 @@ func Resample(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate
 	return resampleBuffer(dst, dstSampleRate, src, srcSampleRate, &opt)
 }
 
-func resampleSize(dstSampleRate, srcSampleRate int, srcSize int) int {
-	return srcSize * dstSampleRate / srcSampleRate
-}
-
 func partialFrameErr(samples int) error {
 	if samples == 0 {
 		return nil
@@ -54,28 +50,61 @@ func partialFrameErr(samples int) error {
 
 var errResamplerClosed = errors.New("resampler is closed")
 
-// Encoders downstream need exact frame sizes, so output leaves in chunks of the latest write's
-// output size, and a remainder waits for the next write.
+// One chunk per write, so resampling keeps the caller's framing. Chunk ends come from the running
+// input total, so rounding never piles up across writes.
 type frameBuffer struct {
-	buf      PCM16Sample
-	dstFrame int
+	srcRate, dstRate, ch int
+	buf                  PCM16Sample
+	chunks               []int
+	inFrames             int64
+	outEnd               int64
 }
 
-func (b *frameBuffer) flush(w PCM16Writer, minSize int) error {
-	frame := b.dstFrame
-	if frame == 0 {
-		frame = len(b.buf)
+// Zero means the write's output joins the next chunk.
+func (b *frameBuffer) queue(frames int) int {
+	b.inFrames += int64(frames)
+	end := b.inFrames * int64(b.dstRate) / int64(b.srcRate) * int64(b.ch)
+	sz := int(end - b.outEnd)
+	b.outEnd = end
+	if sz > 0 {
+		b.chunks = append(b.chunks, sz)
 	}
+	return sz
+}
+
+func (b *frameBuffer) flush(w PCM16Writer) error {
 	var last error
 	rest := b.buf
-	for len(rest) > 0 && len(rest) >= minSize {
-		sz := min(frame, len(rest))
+	for len(b.chunks) > 0 && len(rest) >= b.chunks[0] {
+		if err := w.WriteSample(rest[:b.chunks[0]]); err != nil {
+			last = err
+		}
+		rest = rest[b.chunks[0]:]
+		b.chunks = b.chunks[1:]
+	}
+	b.buf = b.buf[:copy(b.buf, rest)]
+	return last
+}
+
+// soxr rounds its total to nearest, so the last chunk absorbs output the queue did not account for.
+// With no chunk left, as when beep rounds up, the remainder goes out alone.
+func (b *frameBuffer) drain(w PCM16Writer) error {
+	var last error
+	rest := b.buf
+	for len(rest) > 0 {
+		sz := len(rest)
+		if len(b.chunks) > 1 {
+			sz = min(sz, b.chunks[0])
+		}
+		if len(b.chunks) > 0 {
+			b.chunks = b.chunks[1:]
+		}
 		if err := w.WriteSample(rest[:sz]); err != nil {
 			last = err
 		}
 		rest = rest[sz:]
 	}
-	b.buf = b.buf[:copy(b.buf, rest)]
+	b.buf, b.chunks = b.buf[:0], nil
 	return last
 }
 

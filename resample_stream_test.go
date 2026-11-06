@@ -55,8 +55,7 @@ func TestResampleWriterKeepsAllInput(t *testing.T) {
 	}
 }
 
-// A writer that falls behind adds delay for the rest of the call. After the first second, the lag may
-// exceed its warm-up peak only by the one frame that whole-frame output can hold back.
+// Lag after warm-up may exceed its warm-up peak by at most one write's output.
 func TestResampleWriterKeepsUp(t *testing.T) {
 	const srcRate, dstRate, writeFrames, writes = 11025, 8000, 221, 2000
 	dstFrame := writeFrames * dstRate / srcRate
@@ -108,31 +107,108 @@ func TestResampleWriterChunksMatchWrites(t *testing.T) {
 	}
 }
 
-// One long write, such as a long-ptime packet, must not set the chunk size, and with it the delay, for the rest of the call.
-func TestResampleWriterChunksFollowLatestWrite(t *testing.T) {
+// A long write, such as a long-ptime packet, or a short one must not change the chunking of the writes around it.
+func TestResampleWriterChunksMirrorWrites(t *testing.T) {
 	const srcRate, dstRate = 48000, 8000
 	frame := srcRate / media.DefFramesPerSec
+	dstFrame := frame * dstRate / srcRate
+	repeat := func(n, size int) []int { return slices.Repeat([]int{size}, n) }
+	cases := []struct {
+		name   string
+		writes []int
+		chunks [][]int
+	}{
+		{
+			name:   "long write first",
+			writes: append([]int{srcRate}, repeat(50, frame)...),
+			chunks: [][]int{append([]int{dstRate}, repeat(50, dstFrame)...)},
+		},
+		{
+			// The short write adds under one sample. It joins the last chunk if soxr still holds it at Close,
+			// but beep runs a sample ahead and has already flushed it.
+			name:   "short write mid-stream",
+			writes: slices.Concat(repeat(25, frame), []int{5}, repeat(25, frame)),
+			chunks: [][]int{
+				append(repeat(49, dstFrame), dstFrame+1),
+				append(repeat(50, dstFrame), 1),
+			},
+		},
+	}
+	for _, c := range cases {
+		for _, predictable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/predictable=%v", c.name, predictable), func(t *testing.T) {
+				require.Contains(t, c.chunks, chunkSizes(t, srcRate, dstRate, c.writes, 1, predictable))
+			})
+		}
+	}
+
+	// Stereo writes ending mid-frame carry a sample to the next write; chunks still follow whole frames.
+	stereoWrites := make([]int, 50)
+	for i := range stereoWrites {
+		stereoWrites[i] = 2*frame + 1 - 2*(i%2)
+	}
 	for _, predictable := range []bool{false, true} {
-		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
-			var chunks []media.PCM16Sample
-			w := media.ResampleWriter(media.NewPCM16FrameWriter(&chunks, dstRate), srcRate, media.WithPredictableResample(predictable))
-			require.NoError(t, w.WriteSample(make(media.PCM16Sample, srcRate)))
-			for range media.DefFramesPerSec {
-				require.NoError(t, w.WriteSample(make(media.PCM16Sample, frame)))
-			}
-			require.Len(t, chunks[len(chunks)-1], frame*dstRate/srcRate)
-			require.NoError(t, w.Close())
+		t.Run(fmt.Sprintf("stereo writes ending mid-frame/predictable=%v", predictable), func(t *testing.T) {
+			require.Equal(t, repeat(50, 2*dstFrame), chunkSizes(t, srcRate, dstRate, stereoWrites, 2, predictable))
 		})
 	}
+
+	// 11025 Hz writes of 221 or 220 frames resample to a fractional 160.36 or 159.64 samples at 8 kHz.
+	const oddRate, oddWrites = 11025, 200
+	sizes := make([]int, oddWrites)
+	for i := range sizes {
+		sizes[i] = 221 - i%2
+	}
+	for _, predictable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fractional output sizes/predictable=%v", predictable), func(t *testing.T) {
+			chunks := chunkSizes(t, oddRate, dstRate, sizes, 1, predictable)
+			require.Len(t, chunks, oddWrites)
+			total := 0
+			for i, n := range chunks {
+				require.InDelta(t, float64(sizes[i])*dstRate/oddRate, n, 1, "chunk %d", i)
+				total += n
+			}
+			require.Equal(t, oddWrites/2*441*dstRate/oddRate, total)
+		})
+	}
+}
+
+func chunkSizes(t *testing.T, srcRate, dstRate int, writes []int, ch int, predictable bool) []int {
+	t.Helper()
+	var chunks []media.PCM16Sample
+	w := media.ResampleWriter(media.NewPCM16FrameWriter(&chunks, dstRate), srcRate,
+		media.WithResampleChannels(ch), media.WithPredictableResample(predictable))
+	for _, n := range writes {
+		require.NoError(t, w.WriteSample(make(media.PCM16Sample, n)))
+	}
+	require.NoError(t, w.Close())
+	sizes := make([]int, len(chunks))
+	for i, c := range chunks {
+		sizes[i] = len(c)
+	}
+	return sizes
+}
+
+type closeCounter struct {
+	media.PCM16Writer
+	closes int
+}
+
+func (c *closeCounter) Close() error {
+	c.closes++
+	return c.PCM16Writer.Close()
 }
 
 func TestResampleWriterRejectsUseAfterClose(t *testing.T) {
 	for _, predictable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
-			w := media.ResampleWriter(media.NewPCM16BufferWriter(new(media.PCM16Sample), 16000), 48000, media.WithPredictableResample(predictable))
+			down := &closeCounter{PCM16Writer: media.NewPCM16BufferWriter(new(media.PCM16Sample), 16000)}
+			w := media.ResampleWriter(down, 48000, media.WithPredictableResample(predictable))
 			require.NoError(t, w.Close())
-			require.Error(t, w.WriteSample(make(media.PCM16Sample, 960)))
-			require.Error(t, w.Close())
+			require.ErrorContains(t, w.WriteSample(make(media.PCM16Sample, 960)), "closed")
+			require.ErrorContains(t, w.WriteSample(nil), "closed")
+			require.ErrorContains(t, w.Close(), "closed")
+			require.Equal(t, 1, down.closes, "the downstream writer was closed more than once")
 		})
 	}
 }

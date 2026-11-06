@@ -39,6 +39,7 @@ func newResampleWriterBeep(w WriteCloser[PCM16Sample], sampleRate int, opts *res
 		w:       w,
 		srcRate: srcRate,
 		dstRate: dstRate,
+		out:     frameBuffer{srcRate: srcRate, dstRate: dstRate, ch: opts.Channels},
 	}
 	r.r = beepResample(beepQuality, srcRate, dstRate, opts.Channels, r)
 	return r
@@ -66,9 +67,8 @@ func (w *resampleWriterBeep) Close() error {
 		return errResamplerClosed
 	}
 	w.r.srcEnded = true
-	w.stream()
-	err := w.out.flush(w.w, 0)
-	return errors.Join(err, partialFrameErr(len(w.inbuf)), w.w.Close())
+	w.stream(0)
+	return errors.Join(w.out.drain(w.w), partialFrameErr(len(w.inbuf)), w.w.Close())
 }
 
 func (w *resampleWriterBeep) ReadSample(data PCM16Sample) (int, error) {
@@ -81,14 +81,15 @@ func (w *resampleWriterBeep) WriteSample(data PCM16Sample) error {
 	if w.r.srcEnded {
 		return errResamplerClosed
 	}
+	// ReadSample only hands out whole frames, so a partial frame stays at the tail of inbuf.
+	before := len(w.inbuf) / w.r.ch
 	w.inbuf = append(w.inbuf, data...)
-	w.out.dstFrame = resampleSize(w.dstRate, w.srcRate, len(data)/w.r.ch) * w.r.ch
-	w.stream()
-	return w.out.flush(w.w, w.out.dstFrame)
+	w.stream(w.out.queue(len(w.inbuf)/w.r.ch - before))
+	return w.out.flush(w.w)
 }
 
-func (w *resampleWriterBeep) stream() {
-	sz := max(w.out.dstFrame, w.r.ch)
+func (w *resampleWriterBeep) stream(chunk int) {
+	sz := max(chunk, w.r.ch)
 	for {
 		buf := slices.Grow(w.out.buf, sz)
 		n, _ := w.r.Stream(buf[len(buf) : len(buf)+sz])

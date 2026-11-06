@@ -83,8 +83,6 @@ func TestResample(t *testing.T) {
 	gotSrc := writePCM16s(t, srcFile, srcFrames)
 	writePCM16sWebm(t, srcFileWebm, srcRate, srcFrames)
 	require.True(t, gotSrc == "c774af95" || gotSrc == "b04a6a1f")
-	// Output chunks follow each write's size, so the file's short last frame would split the held-back frame.
-	srcFrames = srcFrames[:len(srcFrames)-1]
 
 	for _, c := range []struct {
 		Rate   int
