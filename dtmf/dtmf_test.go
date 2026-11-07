@@ -75,6 +75,32 @@ func TestDTMF(t *testing.T) {
 	}
 }
 
+func TestToneCase(t *testing.T) {
+	for _, c := range []struct {
+		lower, upper byte
+		code         byte
+	}{
+		{'a', 'A', codeA},
+		{'b', 'B', codeB},
+		{'c', 'C', codeC},
+		{'d', 'D', codeD},
+	} {
+		for _, digit := range []byte{c.lower, c.upper} {
+			code, freq := Tone(digit)
+			require.Equal(t, c.code, code, "digit %q", digit)
+			require.Equal(t, eventFreq[c.code][:], freq, "digit %q", digit)
+
+			var buf [4]byte
+			n, err := Encode(buf[:], Event{Digit: digit})
+			require.NoError(t, err)
+			require.Equal(t, 4, n)
+			require.Equal(t, c.code, buf[0], "digit %q", digit)
+		}
+		// Decoding stays lowercase.
+		require.Equal(t, c.lower, CodeToChar(c.code))
+	}
+}
+
 func TestDecodeRTPWithEnd(t *testing.T) {
 	// star end: event=10, end=true, volume=10, dur=2080
 	endPayload, _ := hex.DecodeString("0a8a0820")
@@ -317,5 +343,32 @@ func TestDTMFWithoutAudio(t *testing.T) {
 	// Tone and the pause after it, both rounded to whole frames.
 	frame := uint32(audioRate / rtp.DefFramesPerSec)
 	gap := uint32(audioRate) * uint32(2*roundTo(eventDur, rtp.DefFrameDur)/time.Millisecond) / 1000
+	require.InDelta(t, gap, digitTS[1]-digitTS[0], float64(frame))
+}
+
+func TestDTMFWriteUppercase(t *testing.T) {
+	const rate, eventsPT = 8000, 101
+	var buf rtp.Buffer
+	sw := rtp.NewSeqWriter(&buf, rate)
+	events := sw.NewManualStream(eventsPT)
+
+	require.NoError(t, Write(t.Context(), nil, events, rate, "AWb"))
+
+	var (
+		codes   []byte
+		digitTS []uint32
+	)
+	for _, p := range buf {
+		if p.Marker {
+			codes = append(codes, p.Payload[0])
+			digitTS = append(digitTS, p.Timestamp)
+		}
+	}
+	require.Equal(t, []byte{codeA, codeB}, codes)
+
+	// Tone, the pause after it, then the 'W' delay, all rounded to whole frames.
+	frame := uint32(rate / rtp.DefFramesPerSec)
+	dt := 2*roundTo(eventDur, rtp.DefFrameDur) + roundTo(delayDur, rtp.DefFrameDur)
+	gap := uint32(rate) * uint32(dt/time.Millisecond) / 1000
 	require.InDelta(t, gap, digitTS[1]-digitTS[0], float64(frame))
 }
