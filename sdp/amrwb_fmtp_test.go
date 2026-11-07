@@ -39,11 +39,15 @@ func TestAMRWBAnswerFmtpWhitespace(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		fmtp string
+		exp  string
 	}{
-		{"compact", "octet-align=0;mode-set=0,1,2;max-red=0;mode-change-capability=2"},
+		{"compact", "octet-align=0;mode-set=0,1,2;max-red=0;mode-change-capability=2",
+			"octet-align=0;mode-set=0,1,2;max-red=0;mode-change-capability=2"},
 		// Some carriers put a space after each semicolon.
-		{"spaces", "octet-align=0; mode-set=0,1,2; max-red=0; mode-change-capability=2"},
-		{"tabs", "octet-align=0;\tmode-set=0,1,2;\tmax-red=0"},
+		{"spaces", "octet-align=0; mode-set=0,1,2; max-red=0; mode-change-capability=2",
+			"octet-align=0;mode-set=0,1,2;max-red=0;mode-change-capability=2"},
+		{"tabs", "octet-align=0;\tmode-set=0,1,2;\tmax-red=0",
+			"octet-align=0;mode-set=0,1,2;max-red=0"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			codecs := media.NewCodecSet()
@@ -61,7 +65,7 @@ func TestAMRWBAnswerFmtpWhitespace(t *testing.T) {
 			require.NoError(t, err)
 			// RFC 4867 8.3.1: the answer returns the offered mode-set
 			// unmodified, and echoes max-red and mode-change-capability.
-			require.Contains(t, string(answerData), "a=fmtp:102 octet-align=0;mode-set=0,1,2;max-red=0;mode-change-capability=2\r\n")
+			require.Contains(t, string(answerData), "a=fmtp:102 "+c.exp+"\r\n")
 
 			_, create, ok := config.Audio.Codec.Supports(config.Audio.Info.CodecConfig)
 			require.True(t, ok)

@@ -458,9 +458,10 @@ func TestSDPMediaAnswer(t *testing.T) {
 				},
 			},
 			exp: &AudioConfig{
-				// Pick AMR-WB, encoding matches, ignore other params.
+				// Pick AMR-WB, encoding matches, echo mode-change-capability.
 				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
 					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+					{Key: "mode-change-capability", Val: "2"},
 				}}),
 			},
 		},
@@ -480,6 +481,7 @@ func TestSDPMediaAnswer(t *testing.T) {
 				// Pick AMR-WB in octet-aligned mode.
 				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
 					{Key: "octet-align", Val: "1"}, {Key: "mode-set", Val: "8"},
+					{Key: "mode-change-capability", Val: "2"},
 				}}),
 			},
 		},
