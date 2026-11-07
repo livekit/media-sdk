@@ -60,11 +60,15 @@ func init() {
 			return media.CodecInfo{}, nil, false
 		}
 		const (
-			paramOctetAlign    = "octet-align"
-			paramModeSet       = "mode-set"
-			paramCRC           = "crc"
-			paramRobustSorting = "robust-sorting"
-			paramInterleaving  = "interleaving"
+			paramOctetAlign           = "octet-align"
+			paramModeSet              = "mode-set"
+			paramCRC                  = "crc"
+			paramRobustSorting        = "robust-sorting"
+			paramInterleaving         = "interleaving"
+			paramMaxRed               = "max-red"
+			paramModeChangeCapability = "mode-change-capability"
+			paramModeChangePeriod     = "mode-change-period"
+			paramModeChangeNeighbor   = "mode-change-neighbor"
 		)
 		var (
 			format   = RTPBandwidthEfficient
@@ -117,6 +121,20 @@ func init() {
 			accepted.Add(paramModeSet, offeredModeSet)
 		} else {
 			accepted.Add(paramModeSet, strconv.Itoa(int(mode)))
+		}
+
+		// Echo the declarative offer/answer parameters (RFC 4867 8.3.1). The
+		// encoder transmits with a single fixed mode, so it trivially complies
+		// with any mode-change restriction the offerer asked for.
+		for _, key := range []string{
+			paramMaxRed,
+			paramModeChangeCapability,
+			paramModeChangePeriod,
+			paramModeChangeNeighbor,
+		} {
+			if v, ok := c.Params.Get(key); ok {
+				accepted.Add(key, v)
+			}
 		}
 
 		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
