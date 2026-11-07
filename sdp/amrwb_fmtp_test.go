@@ -59,8 +59,9 @@ func TestAMRWBAnswerFmtpWhitespace(t *testing.T) {
 			require.NoError(t, err)
 			answerData, err := answer.SDP.Marshal()
 			require.NoError(t, err)
-			// RFC 4867 8.3.1: the answer returns the offered mode-set unmodified.
-			require.Contains(t, string(answerData), "a=fmtp:102 octet-align=0;mode-set=0,1,2\r\n")
+			// RFC 4867 8.3.1: the answer returns the offered mode-set
+			// unmodified, and echoes max-red and mode-change-capability.
+			require.Contains(t, string(answerData), "a=fmtp:102 octet-align=0;mode-set=0,1,2;max-red=0;mode-change-capability=2\r\n")
 
 			_, create, ok := config.Audio.Codec.Supports(config.Audio.Info.CodecConfig)
 			require.True(t, ok)
