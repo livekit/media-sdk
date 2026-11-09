@@ -49,9 +49,11 @@ func TestResampleOptionsKeepDefaults(t *testing.T) {
 	require.IsType(t, (*resampleWriterBeep)(nil), w, "the channels option dropped the defaults")
 }
 
-// soxr runs under every call's audio, so its cgo out-parameters must not move to the heap on each write.
-func TestSoxrWriterDoesNotAllocate(t *testing.T) {
-	w := newResampleWriter(&chunkCounter{}, 8000, &resampleOptions{Channels: 1})
+// soxr runs under every call's audio, so its cgo out-parameters must not move to the heap on each call.
+// This skips the writer because CI swaps its mutex for go-deadlock's, which allocates on Lock.
+func TestSoxrDoesNotAllocate(t *testing.T) {
+	w := newResampleWriter(&chunkCounter{}, 8000, &resampleOptions{Channels: 1}).(*resampleWriter)
 	frame := make(PCM16Sample, 160)
-	require.Zero(t, testing.AllocsPerRun(100, func() { _ = w.WriteSample(frame) }))
+	var out PCM16Sample
+	require.Zero(t, testing.AllocsPerRun(100, func() { out, _ = w.r.Resample(out[:0], frame) }))
 }
