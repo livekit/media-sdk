@@ -19,12 +19,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -121,7 +124,8 @@ func TestResample(t *testing.T) {
 
 			writePCM16sWebm(t, resFileWebm, c.Rate, dstFrames)
 
-			expSamples := totalSamples / (srcRate / c.Rate)
+			// soxr rounds the fractional last output frame to the nearest one.
+			expSamples := (totalSamples*c.Rate + srcRate/2) / srcRate
 			require.Equal(t, expSamples, pw.samples)
 			require.Equal(t, len(srcFrames), len(pw.frameT))
 			// Tick at which the first frame was received.
@@ -148,6 +152,213 @@ func TestResample(t *testing.T) {
 		})
 	}
 
+}
+
+const (
+	leftTone  = 440.0
+	rightTone = 660.0
+	// Fails a resampler that spins instead of hanging the whole test run.
+	hangGuard = 10 * time.Second
+)
+
+func TestResampleStereoKeepsChannels(t *testing.T) {
+	const frames = media.DefFramesPerSec
+	for _, rates := range [][2]int{{48000, 16000}, {16000, 48000}} {
+		srcRate, dstRate := rates[0], rates[1]
+		frameLen := srcRate / media.DefFramesPerSec
+		src := stereoTone(srcRate, frames*frameLen)
+		for _, predictable := range []bool{false, true} {
+			opts := []media.ResampleOption{media.WithResampleChannels(2), media.WithPredictableResample(predictable)}
+			run := map[string]func(t *testing.T) media.PCM16Sample{
+				"writer": func(t *testing.T) media.PCM16Sample {
+					var out media.PCM16Sample
+					w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, dstRate), srcRate, opts...)
+					for f := range frames {
+						require.NoError(t, w.WriteSample(src[f*frameLen*2:(f+1)*frameLen*2]))
+					}
+					require.NoError(t, w.Close())
+					return out
+				},
+				"buffer": func(t *testing.T) media.PCM16Sample {
+					return media.Resample(nil, dstRate, src, srcRate, opts...)
+				},
+			}
+			for api, resample := range run {
+				t.Run(fmt.Sprintf("%d-%d/predictable=%v/%s", srcRate, dstRate, predictable, api), func(t *testing.T) {
+					requireChannelsKept(t, resample(t), dstRate)
+				})
+			}
+		}
+	}
+}
+
+func TestSwitchWriterResampleKeepsChannels(t *testing.T) {
+	const srcRate, dstRate = 48000, 16000
+	var out media.PCM16Sample
+	sw := media.NewSwitchWriter(srcRate, media.WithResampleChannels(2))
+	sw.Swap(media.NewPCM16BufferWriter(&out, dstRate))
+	for chunk := range slices.Chunk(stereoTone(srcRate, srcRate), 2*srcRate/media.DefFramesPerSec) {
+		require.NoError(t, sw.WriteSample(chunk))
+	}
+	require.NoError(t, sw.Close())
+	requireChannelsKept(t, out, dstRate)
+}
+
+func TestResampleStereoPartialFrame(t *testing.T) {
+	const (
+		// Upsampling by a whole factor, so no write leaves an output remainder.
+		srcRate, dstRate = 16000, 48000
+		// Half a 20 ms stereo frame plus one sample, so every other write ends mid-frame.
+		oddChunk = srcRate/media.DefFramesPerSec + 1
+	)
+	src := stereoTone(srcRate, srcRate)
+	for _, predictable := range []bool{false, true} {
+		opts := []media.ResampleOption{media.WithResampleChannels(2), media.WithPredictableResample(predictable)}
+		t.Run(fmt.Sprintf("predictable=%v/buffer", predictable), func(t *testing.T) {
+			for _, n := range []int{1, 3} {
+				var out media.PCM16Sample
+				requireReturns(t, func() { out = media.Resample(nil, dstRate, make(media.PCM16Sample, n), srcRate, opts...) })
+				require.Zero(t, len(out)%2)
+			}
+			var out media.PCM16Sample
+			requireReturns(t, func() { out = media.Resample(nil, dstRate, src[:len(src)-1], srcRate, opts...) })
+			requireChannelsKept(t, out, dstRate)
+		})
+		t.Run(fmt.Sprintf("predictable=%v/writer", predictable), func(t *testing.T) {
+			var (
+				out media.PCM16Sample
+				err error
+			)
+			requireReturns(t, func() {
+				w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, dstRate), srcRate, opts...)
+				for chunk := range slices.Chunk(src, oddChunk) {
+					if err = w.WriteSample(chunk); err != nil {
+						return
+					}
+				}
+				err = w.Close()
+			})
+			require.NoError(t, err)
+			requireChannelsKept(t, out, dstRate)
+		})
+	}
+}
+
+func TestResampleBeepShortWrites(t *testing.T) {
+	for _, ch := range []int{1, 2} {
+		for _, rates := range [][2]int{{48000, 16000}, {16000, 48000}} {
+			srcRate, dstRate := rates[0], rates[1]
+			t.Run(fmt.Sprintf("channels=%d/%d-%d", ch, srcRate, dstRate), func(t *testing.T) {
+				opts := []media.ResampleOption{media.WithResampleChannels(ch), media.WithPredictableResample(true)}
+				var out media.PCM16Sample
+				w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, dstRate), srcRate, opts...)
+				require.NoError(t, w.WriteSample(make(media.PCM16Sample, ch)))
+				require.NoError(t, w.WriteSample(make(media.PCM16Sample, srcRate/media.DefFramesPerSec*ch)))
+				require.NoError(t, w.Close())
+			})
+		}
+	}
+}
+
+func TestResampleStereoChunksHoldWholeFrames(t *testing.T) {
+	// An odd 441 frames at 2:1 leaves a fractional output frame on every write.
+	const srcRate, dstRate, frames = 16000, 8000, 441
+	src := stereoTone(srcRate, 20*frames)
+	for _, predictable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
+			var chunks []media.PCM16Sample
+			w := media.ResampleWriter(media.NewPCM16FrameWriter(&chunks, dstRate), srcRate,
+				media.WithResampleChannels(2), media.WithPredictableResample(predictable))
+			for chunk := range slices.Chunk(src, 2*frames) {
+				require.NoError(t, w.WriteSample(chunk))
+			}
+			require.NoError(t, w.Close())
+			require.NotEmpty(t, chunks)
+			for i, c := range chunks {
+				require.Zero(t, len(c)%2, "chunk %d splits a stereo frame", i)
+			}
+		})
+	}
+}
+
+// Two frames at 3:1 resample to zero output frames, which takes soxr's fallback output size.
+func TestResampleStereoTinyWrite(t *testing.T) {
+	for _, predictable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("predictable=%v", predictable), func(t *testing.T) {
+			var out media.PCM16Sample
+			w := media.ResampleWriter(media.NewPCM16BufferWriter(&out, 16000), 48000,
+				media.WithResampleChannels(2), media.WithPredictableResample(predictable))
+			var writeErr, closeErr error
+			requireReturns(t, func() {
+				writeErr = w.WriteSample(make(media.PCM16Sample, 4))
+				closeErr = w.Close()
+			})
+			require.NoError(t, writeErr)
+			require.NoError(t, closeErr)
+		})
+	}
+}
+
+func TestResampleRejectsChannelsBelowOne(t *testing.T) {
+	for _, ch := range []int{0, -1} {
+		require.PanicsWithError(t, fmt.Sprintf("resample: invalid channel count: %d", ch), func() {
+			media.WithResampleChannels(ch)
+		})
+	}
+}
+
+func stereoTone(rate, frames int) media.PCM16Sample {
+	src := make(media.PCM16Sample, 0, 2*frames)
+	for i := range frames {
+		src = append(src, toneSample(leftTone, rate, i), toneSample(rightTone, rate, i))
+	}
+	return src
+}
+
+func requireChannelsKept(t *testing.T, out media.PCM16Sample, rate int) {
+	t.Helper()
+	require.Zero(t, len(out)%2)
+	require.Greater(t, len(out)/2, rate/media.DefFramesPerSec, "output frames")
+	var l, r []float64
+	for i := 0; i < len(out); i += 2 {
+		l = append(l, float64(out[i]))
+		r = append(r, float64(out[i+1]))
+	}
+	require.GreaterOrEqual(t, toneCorr(l, leftTone, rate), 0.99, "left")
+	require.GreaterOrEqual(t, toneCorr(r, rightTone, rate), 0.99, "right")
+	require.Less(t, toneCorr(l, rightTone, rate), 0.05, "right leaked into left")
+	require.Less(t, toneCorr(r, leftTone, rate), 0.05, "left leaked into right")
+}
+
+func requireReturns(t *testing.T, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+	case <-time.After(hangGuard):
+		t.Fatal("resampler did not return")
+	}
+}
+
+func toneSample(freq float64, rate, i int) int16 {
+	return int16(0.5 * math.MaxInt16 * math.Sin(2*math.Pi*freq*float64(i)/float64(rate)))
+}
+
+// Phase-independent, so the resampler's delay needs no lag search.
+func toneCorr(x []float64, freq float64, rate int) float64 {
+	x = x[rate/media.DefFramesPerSec:]
+	var s, c, xx float64
+	for i, v := range x {
+		ph := 2 * math.Pi * freq * float64(i) / float64(rate)
+		s += v * math.Sin(ph)
+		c += v * math.Cos(ph)
+		xx += v * v
+	}
+	return math.Sqrt((s*s + c*c) / (xx * float64(len(x)) / 2))
 }
 
 func removeAfterTest(t testing.TB, path string) {
