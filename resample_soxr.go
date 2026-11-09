@@ -128,6 +128,8 @@ type soxrResampler struct {
 	channels int
 	maxIn    int
 	done     *atomic.Bool
+	// soxr_process writes these through pointers; locals would move to the heap on every call.
+	read, written C.size_t
 }
 
 func soxrErr(e C.soxr_error_t) error {
@@ -210,14 +212,13 @@ func (r *soxrResampler) Resample(out PCM16Sample, in PCM16Sample) (PCM16Sample, 
 	for {
 		out = slices.Grow(out, dstN*ch)
 		dst := out[len(out) : len(out)+dstN*ch]
-		var read, done C.size_t
-		e := C.soxr_process(r.ptr, src, C.size_t(frames), &read, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(dstN), &done)
+		e := C.soxr_process(r.ptr, src, C.size_t(frames), &r.read, C.soxr_out_t(unsafe.Pointer(&dst[0])), C.size_t(dstN), &r.written)
 		if err := soxrErr(e); err != nil {
 			return out, err
 		}
-		out = out[:len(out)+int(done)*ch]
+		out = out[:len(out)+int(r.written)*ch]
 		// A flush can hold more output than one call takes, so it repeats until soxr comes up short.
-		if src != nil || int(done) < dstN {
+		if src != nil || int(r.written) < dstN {
 			return out, nil
 		}
 	}

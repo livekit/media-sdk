@@ -48,3 +48,10 @@ func TestResampleOptionsKeepDefaults(t *testing.T) {
 	w := ResampleWriter(NewPCM16BufferWriter(new(PCM16Sample), 16000), 48000, WithResampleChannels(2))
 	require.IsType(t, (*resampleWriterBeep)(nil), w, "the channels option dropped the defaults")
 }
+
+// soxr runs under every call's audio, so its cgo out-parameters must not move to the heap on each write.
+func TestSoxrWriterDoesNotAllocate(t *testing.T) {
+	w := newResampleWriter(&chunkCounter{}, 8000, &resampleOptions{Channels: 1})
+	frame := make(PCM16Sample, 160)
+	require.Zero(t, testing.AllocsPerRun(100, func() { _ = w.WriteSample(frame) }))
+}
