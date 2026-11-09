@@ -74,15 +74,16 @@ func (b *frameBuffer) queue(frames int) int {
 
 func (b *frameBuffer) flush(w PCM16Writer) error {
 	var last error
-	rest := b.buf
-	for len(b.chunks) > 0 && len(rest) >= b.chunks[0] {
-		if err := w.WriteSample(rest[:b.chunks[0]]); err != nil {
+	rest, n := b.buf, 0
+	for n < len(b.chunks) && len(rest) >= b.chunks[n] {
+		if err := w.WriteSample(rest[:b.chunks[n]]); err != nil {
 			last = err
 		}
-		rest = rest[b.chunks[0]:]
-		b.chunks = b.chunks[1:]
+		rest = rest[b.chunks[n]:]
+		n++
 	}
 	b.buf = b.buf[:copy(b.buf, rest)]
+	b.chunks = b.chunks[:copy(b.chunks, b.chunks[n:])]
 	return last
 }
 
