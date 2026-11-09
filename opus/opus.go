@@ -51,6 +51,9 @@ type Writer = media.WriteCloser[Sample]
 const maxPacketDuration = 120 * time.Millisecond
 
 func Decode(w media.PCM16Writer, channels int, logger logger.Logger) (Writer, error) {
+	if w == nil {
+		return nil, fmt.Errorf("input is nil")
+	}
 	if channels != 1 && channels != 2 {
 		return nil, fmt.Errorf("opus decoder only supports mono or stereo output")
 	}
