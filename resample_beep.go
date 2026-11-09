@@ -49,6 +49,7 @@ type resampleWriterBeep struct {
 	w       WriteCloser[PCM16Sample]
 	r       *beepResampler
 	inbuf   PCM16Sample
+	inpos   int
 	srcRate int
 	dstRate int
 	out     frameBuffer
@@ -68,12 +69,14 @@ func (w *resampleWriterBeep) Close() error {
 	}
 	w.r.srcEnded = true
 	w.stream(0)
-	return errors.Join(w.out.drain(w.w), partialFrameErr(len(w.inbuf)), w.w.Close())
+	return errors.Join(w.out.drain(w.w), partialFrameErr(len(w.inbuf)-w.inpos), w.w.Close())
 }
 
+// Reads advance inpos instead of reslicing inbuf, which would give up its capacity.
 func (w *resampleWriterBeep) ReadSample(data PCM16Sample) (int, error) {
-	n := copy(data, w.inbuf[:len(w.inbuf)-len(w.inbuf)%w.r.ch])
-	w.inbuf = w.inbuf[n:]
+	avail := w.inbuf[w.inpos:]
+	n := copy(data, avail[:len(avail)-len(avail)%w.r.ch])
+	w.inpos += n
 	return n, nil
 }
 
@@ -82,8 +85,9 @@ func (w *resampleWriterBeep) WriteSample(data PCM16Sample) error {
 		return errResamplerClosed
 	}
 	// ReadSample only hands out whole frames, so a partial frame stays at the tail of inbuf.
-	before := len(w.inbuf) / w.r.ch
-	w.inbuf = append(w.inbuf, data...)
+	before := (len(w.inbuf) - w.inpos) / w.r.ch
+	w.inbuf = append(w.inbuf[:copy(w.inbuf, w.inbuf[w.inpos:])], data...)
+	w.inpos = 0
 	w.stream(w.out.queue(len(w.inbuf)/w.r.ch - before))
 	return w.out.flush(w.w)
 }

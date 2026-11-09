@@ -42,3 +42,10 @@ func TestFrameBufferWriteDoesNotAllocate(t *testing.T) {
 	// AllocsPerRun makes one warm-up call before it counts.
 	require.Equal(t, runs+1, w.chunks)
 }
+
+// ReadSample consumes inbuf from the front, so appending the next write must not need a new array.
+func TestBeepWriterDoesNotAllocate(t *testing.T) {
+	w := newResampleWriterBeep(&chunkCounter{}, 8000, &resampleOptions{Channels: 1})
+	frame := make(PCM16Sample, 160)
+	require.Zero(t, testing.AllocsPerRun(100, func() { _ = w.WriteSample(frame) }))
+}
