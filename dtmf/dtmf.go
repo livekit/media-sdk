@@ -196,6 +196,7 @@ var charToEvent = map[byte]byte{
 	'5': code5, '6': code6, '7': code7, '8': code8, '9': code9,
 	'*': codeStar, '#': codeHash,
 	'a': codeA, 'b': codeB, 'c': codeC, 'd': codeD,
+	'A': codeA, 'B': codeB, 'C': codeC, 'D': codeD,
 }
 
 type Event struct {
@@ -277,7 +278,7 @@ func roundTo(dt, step time.Duration) time.Duration {
 // the start of each digit, even when telephone-event is negotiated at a different clock rate.
 // Event durations are in eventsRate units, the negotiated telephone-event clock rate.
 //
-// Digits may contain a special character 'w' which adds a 0.5 sec delay.
+// Digits may contain a special character 'w' (or 'W') which adds a 0.5 sec delay.
 func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *rtp.Stream, eventsRate int, digits string) error {
 	const framesPerSec = int(time.Second / rtp.DefFrameDur)
 	var (
@@ -327,7 +328,7 @@ func Write(ctx context.Context, audio media.Writer[media.PCM16Sample], events *r
 				}
 				b := digits[0]
 				digits = digits[1:]
-				if b == 'w' {
+				if b == 'w' || b == 'W' {
 					setDelay(delayDur)
 				} else {
 					code, freq = Tone(b)
