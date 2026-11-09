@@ -168,3 +168,9 @@ func TestDecodeLongPackets(t *testing.T) {
 		}
 	}
 }
+
+// nil input should return an error instead of segfaulting
+func TestDecodeNil(t *testing.T) {
+	_, err := Decode(nil, 1, logger.GetLogger())
+	require.Error(t, err)
+}
