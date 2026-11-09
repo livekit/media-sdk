@@ -101,7 +101,7 @@ func (d *ULawDecoder) Close() error {
 }
 
 func (d *ULawDecoder) WriteSample(in ULawSample) error {
-	if len(in) >= cap(d.buf) {
+	if len(in) > cap(d.buf) {
 		d.buf = make(media.PCM16Sample, len(in))
 	} else {
 		d.buf = d.buf[:len(in)]
@@ -137,7 +137,7 @@ func (e *ULawEncoder) Close() error {
 }
 
 func (e *ULawEncoder) WriteSample(in media.PCM16Sample) error {
-	if len(in) >= cap(e.buf) {
+	if len(in) > cap(e.buf) {
 		e.buf = make(ULawSample, len(in))
 	} else {
 		e.buf = e.buf[:len(in)]
