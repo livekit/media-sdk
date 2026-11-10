@@ -148,15 +148,36 @@ type MediaSampleWriter interface {
 	WriteSample(sample media.Sample) error
 }
 
-func FromSampleWriter[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration) WriteCloser[T] {
+type SampleWriterOption func(*sampleWriterOptions)
+
+type sampleWriterOptions struct {
+	copySamples bool
+}
+
+// With false, w gets the caller's buffer instead of a copy, and the data is only valid until w.WriteSample returns.
+// Turn it off only for a writer that copies what it needs, like pion's TrackLocalStaticSample.
+func WithSampleCopy(enable bool) SampleWriterOption {
+	return func(o *sampleWriterOptions) {
+		o.copySamples = enable
+	}
+}
+
+// Each sample is copied before it reaches w, so w may keep it, unless WithSampleCopy(false) is passed.
+func FromSampleWriter[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration, opts ...SampleWriterOption) WriteCloser[T] {
+	o := sampleWriterOptions{copySamples: true}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return &sampleWriter[T]{
-		w:          w,
-		sampleRate: sampleRate,
-		sampleDur:  sampleDur,
+		w:                   w,
+		sampleRate:          sampleRate,
+		sampleDur:           sampleDur,
+		sampleWriterOptions: o,
 	}
 }
 
 type sampleWriter[T ~[]byte] struct {
+	sampleWriterOptions
 	w          MediaSampleWriter
 	sampleRate int
 	sampleDur  time.Duration
@@ -175,6 +196,9 @@ func (w *sampleWriter[T]) Close() error {
 }
 
 func (w *sampleWriter[T]) WriteSample(in T) error {
+	if !w.copySamples {
+		return w.w.WriteSample(media.Sample{Data: []byte(in), Duration: w.sampleDur})
+	}
 	data := make([]byte, len(in))
 	copy(data, in)
 	return w.w.WriteSample(media.Sample{Data: data, Duration: w.sampleDur})
