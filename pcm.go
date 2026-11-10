@@ -148,6 +148,8 @@ type MediaSampleWriter interface {
 	WriteSample(sample media.Sample) error
 }
 
+// The sample's data is only valid until w.WriteSample returns, so w must copy what it keeps.
+// pion's TrackLocalStaticSample copies it while packetizing.
 func FromSampleWriter[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration) WriteCloser[T] {
 	return &sampleWriter[T]{
 		w:          w,
@@ -175,7 +177,5 @@ func (w *sampleWriter[T]) Close() error {
 }
 
 func (w *sampleWriter[T]) WriteSample(in T) error {
-	data := make([]byte, len(in))
-	copy(data, in)
-	return w.w.WriteSample(media.Sample{Data: data, Duration: w.sampleDur})
+	return w.w.WriteSample(media.Sample{Data: []byte(in), Duration: w.sampleDur})
 }
