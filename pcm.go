@@ -148,9 +148,19 @@ type MediaSampleWriter interface {
 	WriteSample(sample media.Sample) error
 }
 
-// The sample's data is only valid until w.WriteSample returns, so w must copy what it keeps.
-// pion's TrackLocalStaticSample copies it while packetizing.
+// Each sample is copied before it reaches w, so w may keep it.
 func FromSampleWriter[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration) WriteCloser[T] {
+	return &sampleWriter[T]{
+		w:           w,
+		sampleRate:  sampleRate,
+		sampleDur:   sampleDur,
+		copySamples: true,
+	}
+}
+
+// Like FromSampleWriter, but w gets the caller's buffer instead of a copy, and the data is only valid until
+// w.WriteSample returns. Use it for a writer that copies what it needs, like pion's TrackLocalStaticSample.
+func FromSampleWriterNoCopy[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration) WriteCloser[T] {
 	return &sampleWriter[T]{
 		w:          w,
 		sampleRate: sampleRate,
@@ -159,9 +169,10 @@ func FromSampleWriter[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur 
 }
 
 type sampleWriter[T ~[]byte] struct {
-	w          MediaSampleWriter
-	sampleRate int
-	sampleDur  time.Duration
+	w           MediaSampleWriter
+	sampleRate  int
+	sampleDur   time.Duration
+	copySamples bool
 }
 
 func (w *sampleWriter[T]) String() string {
@@ -177,5 +188,10 @@ func (w *sampleWriter[T]) Close() error {
 }
 
 func (w *sampleWriter[T]) WriteSample(in T) error {
-	return w.w.WriteSample(media.Sample{Data: []byte(in), Duration: w.sampleDur})
+	if !w.copySamples {
+		return w.w.WriteSample(media.Sample{Data: []byte(in), Duration: w.sampleDur})
+	}
+	data := make([]byte, len(in))
+	copy(data, in)
+	return w.w.WriteSample(media.Sample{Data: data, Duration: w.sampleDur})
 }
