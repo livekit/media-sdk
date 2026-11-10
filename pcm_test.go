@@ -52,9 +52,9 @@ func (s *lastSample) WriteSample(sample media.Sample) error {
 }
 
 // Every encoded frame goes through here, and pion copies the payload while packetizing, so another copy is waste.
-func TestFromSampleWriterNoCopyDoesNotAllocate(t *testing.T) {
+func TestFromSampleWriterWithoutCopyDoesNotAllocate(t *testing.T) {
 	sink := &lastSample{}
-	w := FromSampleWriterNoCopy[[]byte](sink, 48000, 20*time.Millisecond)
+	w := FromSampleWriter[[]byte](sink, 48000, 20*time.Millisecond, WithSampleCopy(false))
 	frame := []byte{1, 2, 3, 4}
 	require.Zero(t, testing.AllocsPerRun(100, func() { _ = w.WriteSample(frame) }))
 	require.Equal(t, frame, sink.data)

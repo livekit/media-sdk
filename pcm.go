@@ -148,31 +148,39 @@ type MediaSampleWriter interface {
 	WriteSample(sample media.Sample) error
 }
 
-// Each sample is copied before it reaches w, so w may keep it.
-func FromSampleWriter[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration) WriteCloser[T] {
-	return &sampleWriter[T]{
-		w:           w,
-		sampleRate:  sampleRate,
-		sampleDur:   sampleDur,
-		copySamples: true,
+type SampleWriterOption func(*sampleWriterOptions)
+
+type sampleWriterOptions struct {
+	copySamples bool
+}
+
+// With false, w gets the caller's buffer instead of a copy, and the data is only valid until w.WriteSample returns.
+// Turn it off only for a writer that copies what it needs, like pion's TrackLocalStaticSample.
+func WithSampleCopy(enable bool) SampleWriterOption {
+	return func(o *sampleWriterOptions) {
+		o.copySamples = enable
 	}
 }
 
-// Like FromSampleWriter, but w gets the caller's buffer instead of a copy, and the data is only valid until
-// w.WriteSample returns. Use it for a writer that copies what it needs, like pion's TrackLocalStaticSample.
-func FromSampleWriterNoCopy[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration) WriteCloser[T] {
+// Each sample is copied before it reaches w, so w may keep it, unless WithSampleCopy(false) is passed.
+func FromSampleWriter[T ~[]byte](w MediaSampleWriter, sampleRate int, sampleDur time.Duration, opts ...SampleWriterOption) WriteCloser[T] {
+	o := sampleWriterOptions{copySamples: true}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return &sampleWriter[T]{
-		w:          w,
-		sampleRate: sampleRate,
-		sampleDur:  sampleDur,
+		w:                   w,
+		sampleRate:          sampleRate,
+		sampleDur:           sampleDur,
+		sampleWriterOptions: o,
 	}
 }
 
 type sampleWriter[T ~[]byte] struct {
-	w           MediaSampleWriter
-	sampleRate  int
-	sampleDur   time.Duration
-	copySamples bool
+	sampleWriterOptions
+	w          MediaSampleWriter
+	sampleRate int
+	sampleDur  time.Duration
 }
 
 func (w *sampleWriter[T]) String() string {
