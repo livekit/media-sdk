@@ -111,6 +111,36 @@ func (b *frameBuffer) drain(w PCM16Writer) error {
 
 type ResampleOption func(opts *resampleOptions)
 
+// ResampleQuality selects a SoX resampling recipe. These values do not describe
+// Beep quality levels; pure-Go and predictable resampling ignore this setting.
+type ResampleQuality int
+
+const (
+	ResampleQualityLow      ResampleQuality = iota // LOW: the default, with a larger rolloff.
+	ResampleQualityQuick                           // QUICK: cubic interpolation.
+	ResampleQualityMedium                          // MEDIUM: 16-bit quality with medium rolloff.
+	ResampleQualityHigh                            // HIGH: 20-bit quality.
+	ResampleQualityVeryHigh                        // VERY_HIGH: 28-bit quality.
+)
+
+// WithResampleQuality selects the SoX recipe for Resample and ResampleWriter.
+// LOW remains the default. Higher quality can preserve more high-frequency
+// content but may buffer more input before emitting output. Close the writer to
+// flush its tail. This option has no effect without CGO or with
+// WithPredictableResample(true). It panics immediately for an invalid quality,
+// regardless of the backend or sample rates.
+func WithResampleQuality(quality ResampleQuality) ResampleOption {
+	switch quality {
+	case ResampleQualityQuick, ResampleQualityLow, ResampleQualityMedium,
+		ResampleQualityHigh, ResampleQualityVeryHigh:
+	default:
+		panic(fmt.Errorf("resample: invalid quality: %d", quality))
+	}
+	return func(opts *resampleOptions) {
+		opts.Quality = quality
+	}
+}
+
 func newResampleOptions(opts []ResampleOption) resampleOptions {
 	opt := resampleOptions{Channels: 1}
 	for _, o := range DefaultResampleOptions {
@@ -147,6 +177,7 @@ func WithResampleDump(inputName, outputName string) ResampleOption {
 
 type resampleOptions struct {
 	Channels    int
+	Quality     ResampleQuality
 	Predictable bool
 	DumpInput   string
 	DumpOutput  string
