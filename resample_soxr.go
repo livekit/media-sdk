@@ -52,13 +52,30 @@ func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int, opts *resampl
 		dstRate: dstRate,
 		out:     frameBuffer{srcRate: srcRate, dstRate: dstRate, ch: opts.Channels},
 	}
-	quality := int(C.SOXR_LQ)
+	quality := soxrQuality(opts.Quality)
 	var err error
 	r.r, err = newSoxr(dstRate, srcRate, opts.Channels, quality)
 	if err != nil {
 		panic(err)
 	}
 	return r
+}
+
+func soxrQuality(quality ResampleQuality) int {
+	switch quality {
+	case ResampleQualityQuick:
+		return int(C.SOXR_QQ)
+	case ResampleQualityLow:
+		return int(C.SOXR_LQ)
+	case ResampleQualityMedium:
+		return int(C.SOXR_MQ)
+	case ResampleQualityHigh:
+		return int(C.SOXR_HQ)
+	case ResampleQualityVeryHigh:
+		return int(C.SOXR_VHQ)
+	default:
+		panic(fmt.Errorf("resample: invalid quality: %d", quality))
+	}
 }
 
 type resampleWriter struct {
@@ -114,9 +131,8 @@ func (w *resampleWriter) WriteSample(data PCM16Sample) error {
 	if err != nil {
 		return err
 	}
-	// Resampler will likely return a short buffer in the first run. In that case, we emit no samples on the first call.
-	// This will cause a one frame delay for each resampler. Flushing the sampler, however will lead to frame
-	// discontinuity, and thus - distortions on the frame boundaries.
+	// The resampler may buffer multiple chunks, depending on the quality and rates.
+	// Keep its state until Close: flushing each write would distort chunk boundaries.
 	w.out.queue(len(data) / ch)
 	return w.out.flush(w.w)
 }
