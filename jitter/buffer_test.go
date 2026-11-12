@@ -299,6 +299,38 @@ func TestDuplicateBehindGap(t *testing.T) {
 	})
 }
 
+// A copy of the last released packet is a duplicate, not a drop.
+func TestDuplicateAfterRelease(t *testing.T) {
+	out := make(chan []ExtPacket, 10)
+	losses := 0
+	b := NewBuffer(&testDepacketizer{}, testBufferLatency, chanFunc(t, out),
+		WithPacketLossHandler(func(_, _ uint64) { losses++ }))
+	s := newTestStream()
+
+	p1 := s.gen(true, true)
+	b.Push(p1)
+	b.Push(p1)
+	b.Push(p1)
+	checkSample(t, out, 1)
+	checkSample(t, out, 0)
+
+	b.Push(s.gen(true, true))
+	checkSample(t, out, 1)
+	require.Zero(t, losses, "a duplicate is not a loss")
+
+	b.Push(p1) // older than the last released packet
+	checkSample(t, out, 0)
+	require.Equal(t, 1, losses)
+
+	checkStats(t, b, &BufferStats{
+		PacketsPushed:    5,
+		PacketsDropped:   1,
+		PacketsPopped:    2,
+		SamplesPopped:    2,
+		PacketsDuplicate: 2,
+	})
+}
+
 // A duplicate inside a multi-packet frame, such as a NACK retransmission plus
 // the late original on video, must not break the frame. Without the check the
 // repeated sequence number fails isComplete and the whole frame is dropped.
