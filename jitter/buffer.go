@@ -72,7 +72,7 @@ type BufferStats struct {
 	PacketsReordered uint64 // packets put back in sequence
 	SequenceRestarts uint64 // times the buffer re-synced onto another sequence line, same SSRC
 	PacketsStray     uint64 // packets dropped for belonging to a sequence line that is not playing (also in PacketsDropped)
-	PacketsDuplicate uint64 // packets discarded because the same sequence number is already buffered (not in PacketsDropped)
+	PacketsDuplicate uint64 // packets discarded because the same sequence number is buffered or just released (not in PacketsDropped)
 }
 
 type PacketFunc func(packets []ExtPacket)
@@ -320,6 +320,12 @@ func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
 			// onPacketLoss does not carry PacketsStray
 			b.notifyStats()
 		}
+		return
+	}
+
+	// copy of the last released packet
+	if b.initialized && pkt.SequenceNumber == b.prevSN {
+		b.duplicate(pkt)
 		return
 	}
 
