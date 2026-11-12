@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1401,4 +1402,37 @@ func TestNewOfferWithLocalProfiles(t *testing.T) {
 	require.Equal(t, mc1.Crypto.Keys.LocalMasterKey, mc2.Crypto.Keys.LocalMasterKey)
 	require.Equal(t, mc1.Crypto.Keys.LocalMasterSalt, mc2.Crypto.Keys.LocalMasterSalt)
 	require.NotEqual(t, mc1.Crypto.Keys.RemoteMasterKey, mc2.Crypto.Keys.RemoteMasterKey)
+}
+
+// RFC 3264, section 5: the o= session ID and version must fit in a signed 64-bit
+// integer, and the initial version must be less than 2^62-1. Strict parsers reject
+// offers that break this, so check the marshalled o= line the way such a parser would.
+func TestNewOfferWithOriginInRange(t *testing.T) {
+	const maxInitialVersion = 1<<62 - 1
+	g := codecSet()
+	ip := netip.MustParseAddr("1.1.1.1")
+
+	// A uniform random uint64 lands at or above 2^63 half the time, so 1000 offers
+	// in range rule out the old behavior.
+	for range 1000 {
+		o, err := NewOfferWith(g, ip, 5000, EncryptionNone)
+		require.NoError(t, err)
+		data, err := o.SDP.Marshal()
+		require.NoError(t, err)
+
+		var origin []string
+		for _, line := range strings.Split(string(data), "\r\n") {
+			if strings.HasPrefix(line, "o=") {
+				origin = strings.Fields(line)
+				break
+			}
+		}
+		require.Len(t, origin, 6, "o= line")
+		for _, field := range origin[1:3] {
+			v, err := strconv.ParseInt(field, 10, 64)
+			require.NoError(t, err, "o= value %q must fit in a signed 64-bit integer", field)
+			require.Positive(t, v)
+			require.Less(t, v, int64(maxInitialVersion))
+		}
+	}
 }
