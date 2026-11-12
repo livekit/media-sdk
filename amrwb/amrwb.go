@@ -38,6 +38,7 @@ type Format = amrwb.Format
 const (
 	Storage               = amrwb.Storage
 	RTPBandwidthEfficient = amrwb.RTPBandwidthEfficient
+	RTPOctetAligned       = amrwb.RTPOctetAligned
 )
 
 func init() {
@@ -69,11 +70,15 @@ func init() {
 		)
 
 		// Select between bandwidth-efficient format (bit packing) and octet-aligned modes (align with pad bits).
-		if v, ok := c.Params.Get(paramOctetAlign); ok && v != "0" {
-			// TODO: support octet-aligned mode
+		switch v, _ := c.Params.Get(paramOctetAlign); v {
+		case "", "0":
+			accepted.Add(paramOctetAlign, "0")
+		case "1":
+			format = RTPOctetAligned
+			accepted.Add(paramOctetAlign, "1")
+		default:
 			return media.CodecInfo{}, nil, false
 		}
-		accepted.Add(paramOctetAlign, "0")
 
 		// Pick the best mode the peer can support.
 		// TODO: we should probably change the priority of the codec based on this as well
