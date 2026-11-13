@@ -1408,7 +1408,9 @@ func TestNewOfferWithLocalProfiles(t *testing.T) {
 // integer, and the initial version must be less than 2^62-1. Strict parsers reject
 // offers that break this, so check the marshalled o= line the way such a parser would.
 func TestNewOfferWithOriginInRange(t *testing.T) {
-	const maxInitialVersion = 1<<62 - 1
+	// The local SDP built after the answer uses the session ID + 4 as its version,
+	// so the ID must stay 4 below the initial-version bound.
+	const maxSessionID = 1<<62 - 5
 	g := codecSet()
 	ip := netip.MustParseAddr("1.1.1.1")
 
@@ -1432,7 +1434,7 @@ func TestNewOfferWithOriginInRange(t *testing.T) {
 			v, err := strconv.ParseInt(field, 10, 64)
 			require.NoError(t, err, "o= value %q must fit in a signed 64-bit integer", field)
 			require.Positive(t, v)
-			require.Less(t, v, int64(maxInitialVersion))
+			require.Less(t, v, int64(maxSessionID))
 		}
 	}
 }

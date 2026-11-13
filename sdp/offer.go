@@ -39,13 +39,11 @@ var (
 	ErrNoCommonCrypto = errors.New("no common encryption profiles")
 )
 
-// maxInitialSessionVersion is the exclusive upper bound for the o= session ID and
-// version of a new session description. RFC 3264, section 5: both values must fit
-// in a signed 64-bit integer, and the initial version must be less than 2^62-1.
-const maxInitialSessionVersion = 1<<62 - 1
+// RFC 3264 §5 caps the initial o= version below 2^62-1. buildLocalSDP uses
+// session ID + 4 as the version, so leave room for that.
+const maxInitialSessionVersion = 1<<62 - 5
 
-// newSessionID returns a random, non-zero o= session ID that is also valid as an
-// initial session version.
+// newSessionID returns a random, non-zero o= session ID.
 func newSessionID() uint64 {
 	return 1 + rand.Uint64N(maxInitialSessionVersion-1)
 }
