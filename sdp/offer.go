@@ -39,6 +39,15 @@ var (
 	ErrNoCommonCrypto = errors.New("no common encryption profiles")
 )
 
+// RFC 3264 §5 caps the initial o= version below 2^62-1. buildLocalSDP uses
+// session ID + 4 as the version, so leave room for that.
+const maxInitialSessionVersion = 1<<62 - 5
+
+// newSessionID returns a random, non-zero o= session ID.
+func newSessionID() uint64 {
+	return 1 + rand.Uint64N(maxInitialSessionVersion-1)
+}
+
 type Encryption int
 
 const (
@@ -284,7 +293,7 @@ func WithLocalProfiles(profiles []srtp.Profile) NegotiationOption {
 
 // NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening port.
 func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (*Offer, error) {
-	sessId := rand.Uint64() // TODO: do we need to track these?
+	sessId := newSessionID()
 
 	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted, opts...)
 	if err != nil {
@@ -455,7 +464,7 @@ func (d *Answer) apply(offer *Offer, enc Encryption, generateLocalSDP bool) (*Me
 // buildLocalSDP produces the offerer's local SDP (negotiated view, our connection).
 func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, sprof *srtp.Profile) (*sdp.SessionDescription, error) {
 	if sessionID == 0 {
-		sessionID = rand.Uint64()
+		sessionID = newSessionID()
 	}
 	addrStr := local.Addr().String()
 	portVal := int(local.Port())
