@@ -221,3 +221,49 @@ func TestMixer(t *testing.T) {
 		m.CheckSampleN(steps)
 	})
 }
+
+func TestInputBufferCapacity(t *testing.T) {
+	const (
+		sampleRate   = 48000
+		frameSize    = sampleRate / 50
+		packetSize   = 6 * frameSize // one 120 ms opus packet
+		raisedFrames = packetSize/frameSize + 1
+	)
+	packet := make(msdk.PCM16Sample, packetSize)
+	for i := range packet {
+		packet[i] = int16(i + 1)
+	}
+
+	t.Run("raised capacity keeps the whole packet", func(t *testing.T) {
+		var sample msdk.PCM16Sample
+		m := newMixer(newTestWriter(&sample, sampleRate), frameSize, WithInputBufferCapacity(raisedFrames))
+		inp := m.NewInput()
+
+		require.NoError(t, inp.WriteSample(packet))
+		require.Zero(t, m.stats.InputSamplesDropped.Load())
+
+		var mixed msdk.PCM16Sample
+		for range packetSize / frameSize {
+			m.mixOnce()
+			mixed = append(mixed, sample...)
+		}
+		require.Equal(t, packet, mixed)
+	})
+
+	t.Run("raised capacity keeps the default start minimum", func(t *testing.T) {
+		var sample msdk.PCM16Sample
+		m := newMixer(newTestWriter(&sample, sampleRate), frameSize, WithInputBufferCapacity(raisedFrames))
+		inp := m.NewInput()
+
+		silence := make(msdk.PCM16Sample, frameSize)
+		for range DefaultInputBufferMin - 1 {
+			require.NoError(t, inp.WriteSample(packet[:frameSize]))
+		}
+		m.mixOnce()
+		require.Equal(t, silence, sample)
+
+		require.NoError(t, inp.WriteSample(packet[:frameSize]))
+		m.mixOnce()
+		require.Equal(t, packet[:frameSize], sample)
+	})
+}

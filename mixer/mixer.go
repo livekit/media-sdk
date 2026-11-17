@@ -122,6 +122,13 @@ func WithInputBufferFrames(frames int) MixerOptions {
 	}
 }
 
+// Raises each input's capacity to frames but keeps the start minimum; a later WithInputBufferFrames resets both.
+func WithInputBufferCapacity(frames int) MixerOptions {
+	return func(m *Mixer) {
+		m.inputBufferFrames = max(m.inputBufferFrames, frames)
+	}
+}
+
 func WithStats(stats *Stats) MixerOptions {
 	return func(m *Mixer) {
 		m.stats = stats
