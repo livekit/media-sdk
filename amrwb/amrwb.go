@@ -208,6 +208,7 @@ func (e *Encoder) SampleRate() int {
 }
 
 func (e *Encoder) Close() error {
+	e.e.Close()
 	return e.w.Close()
 }
 
