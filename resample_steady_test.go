@@ -29,22 +29,25 @@ import (
 type leader interface{ Lead() int }
 
 // A skipped write is a 20 ms hole in an RTP stream and a doubled one is a burst (issue #109). soxr's
-// hold-back peaks late on some rates, so each stream runs 30 s.
+// hold-back peaks late on some rates, so each stream runs at least 30 s.
 func TestSteadyResampleEmitsEveryWrite(t *testing.T) {
 	cases := []struct {
 		src, dst, ms, ch int
 		predictable      bool
+		secs             int
 	}{
-		{8000, 48000, 20, 1, false},
-		{48000, 8000, 20, 1, false},
-		{16000, 48000, 20, 2, false},
-		{48000, 16000, 20, 1, false},
-		{8000, 48000, 10, 2, false},
-		{48000, 8000, 10, 1, false},
-		{11025, 48000, 10, 1, false},
-		{44100, 48000, 10, 2, false},
-		{8000, 48000, 20, 1, true},
-		{11025, 48000, 10, 1, true},
+		// soxr's hold-back last peaked 1 frame higher at 38 s here, which the lead's margin covers.
+		{src: 11025, dst: 48000, ms: 1, ch: 1, secs: 45},
+		{src: 8000, dst: 48000, ms: 20, ch: 1},
+		{src: 48000, dst: 8000, ms: 20, ch: 1},
+		{src: 16000, dst: 48000, ms: 20, ch: 2},
+		{src: 48000, dst: 16000, ms: 20, ch: 1},
+		{src: 8000, dst: 48000, ms: 10, ch: 2},
+		{src: 48000, dst: 8000, ms: 10, ch: 1},
+		{src: 11025, dst: 48000, ms: 10, ch: 1},
+		{src: 44100, dst: 48000, ms: 10, ch: 2},
+		{src: 8000, dst: 48000, ms: 20, ch: 1, predictable: true},
+		{src: 11025, dst: 48000, ms: 10, ch: 1, predictable: true},
 	}
 	for _, c := range cases {
 		t.Run(fmt.Sprintf("%d-%d/%dms/ch%d/predictable=%v", c.src, c.dst, c.ms, c.ch, c.predictable), func(t *testing.T) {
@@ -53,7 +56,11 @@ func TestSteadyResampleEmitsEveryWrite(t *testing.T) {
 				media.WithResampleChannels(c.ch), media.WithPredictableResample(c.predictable), media.WithSteadyResample())
 			frames := c.src * c.ms / 1000
 			in := make(media.PCM16Sample, frames*c.ch)
-			for i := range 30_000 / c.ms {
+			secs := c.secs
+			if secs == 0 {
+				secs = 30
+			}
+			for i := range secs * 1000 / c.ms {
 				before := len(chunks)
 				require.NoError(t, w.WriteSample(in))
 				// beep's look-ahead holds the first write back, so its chunks run one write late.
@@ -120,5 +127,55 @@ func TestSteadyResampleOnlyDelaysOutput(t *testing.T) {
 				require.InDelta(t, nominal, len(chunk)/c.ch, 1, "chunk %d", i)
 			}
 		})
+	}
+}
+
+// A short last write must not set the frame size for what close drains, or a file ending in a partial
+// frame leaves hundreds of tiny RTP packets at hangup.
+func TestSteadyResampleCloseKeepsFrameAfterShortWrite(t *testing.T) {
+	const srcRate, dstRate = 8000, 48000
+	var chunks []media.PCM16Sample
+	w := media.ResampleWriter(media.NewPCM16FrameWriter(&chunks, dstRate), srcRate, media.WithSteadyResample())
+	for range 50 {
+		require.NoError(t, w.WriteSample(make(media.PCM16Sample, srcRate/media.DefFramesPerSec)))
+	}
+	require.NoError(t, w.WriteSample(make(media.PCM16Sample, 1)))
+	before := len(chunks)
+	require.NoError(t, w.Close())
+	for i, chunk := range chunks[before:] {
+		require.Len(t, chunk, dstRate/media.DefFramesPerSec, "close chunk %d", i)
+	}
+}
+
+// With no whole chunk ever queued there is no frame to keep, and a lone odd-sized write would crash
+// G.722, so close emits nothing.
+func TestSteadyResampleCloseWithoutAChunkEmitsNothing(t *testing.T) {
+	var chunks []media.PCM16Sample
+	w := media.ResampleWriter(media.NewPCM16FrameWriter(&chunks, 16000), 48000, media.WithSteadyResample())
+	require.NoError(t, w.WriteSample(make(media.PCM16Sample, 1)))
+	require.NoError(t, w.Close())
+	require.Empty(t, chunks)
+}
+
+// Debug dumps must not change what a consumer subtracts for playout.
+func TestSteadyResampleLeadSurvivesInputDump(t *testing.T) {
+	w := media.ResampleWriter(media.NewPCM16BufferWriter(new(media.PCM16Sample), 48000), 8000,
+		media.WithSteadyResample(), media.WithResampleDump(t.TempDir()+"/in", ""))
+	l, ok := w.(leader)
+	require.True(t, ok, "%T has no Lead", w)
+	require.Positive(t, l.Lead())
+	require.NoError(t, w.Close())
+}
+
+// One-shot output has no stream to keep steady, so the option must not pad it.
+func TestSteadyResampleLeavesOneShotAlone(t *testing.T) {
+	src := make(media.PCM16Sample, 110)
+	for i := range src {
+		src[i] = int16(i * 300)
+	}
+	for _, predictable := range []bool{false, true} {
+		plain := media.Resample(nil, 48000, src, 11025, media.WithPredictableResample(predictable))
+		steady := media.Resample(nil, 48000, src, 11025, media.WithPredictableResample(predictable), media.WithSteadyResample())
+		require.Equal(t, plain, steady, "predictable=%v", predictable)
 	}
 }

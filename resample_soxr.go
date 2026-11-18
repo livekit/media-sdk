@@ -31,6 +31,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -77,15 +78,27 @@ const soxrQuality = int(C.SOXR_LQ)
 // common rates, 12,000 calls were never short and at most 2 ms over.
 const leadProbeCalls = 12000
 
-var soxrLeads sync.Map // [3]int{src, dst, channels} -> lead frames
+// Later peaks ran at most 1 frame higher (11.025k->48k with 1 ms writes, at 38 s).
+const leadMargin = 250 * time.Microsecond
+
+var soxrLeads sync.Map // [3]int{src, dst, channels} -> *soxrLeadEntry
+
+// Streams that start together on a new rate pair share one probe.
+type soxrLeadEntry struct {
+	once sync.Once
+	lead int
+}
+
+func soxrLead(srcRate, dstRate, channels int) int {
+	v, _ := soxrLeads.LoadOrStore([3]int{srcRate, dstRate, channels}, new(soxrLeadEntry))
+	e := v.(*soxrLeadEntry)
+	e.once.Do(func() { e.lead = probeSoxrLead(srcRate, dstRate, channels) })
+	return e.lead
+}
 
 // soxr returns output a block at a time, so what it holds back swings by up to about 20 ms within a
 // stream. A stream that starts behind by the most it ever holds can emit every write's chunk on time.
-func soxrLead(srcRate, dstRate, channels int) int {
-	key := [3]int{srcRate, dstRate, channels}
-	if v, ok := soxrLeads.Load(key); ok {
-		return v.(int)
-	}
+func probeSoxrLead(srcRate, dstRate, channels int) int {
 	r, err := newSoxr(dstRate, srcRate, channels, soxrQuality)
 	if err != nil {
 		return 0
@@ -103,9 +116,7 @@ func soxrLead(srcRate, dstRate, channels int) int {
 	}
 	// The peak sits just before soxr returns a block, which a step of several frames can step over.
 	hidden := float64(step-1) * float64(dstRate) / float64(srcRate)
-	lead := int(math.Ceil(float64(most) + hidden))
-	soxrLeads.Store(key, lead)
-	return lead
+	return int(math.Ceil(float64(most) + hidden + float64(dstRate)*leadMargin.Seconds()))
 }
 
 type resampleWriter struct {
@@ -125,7 +136,8 @@ func (w *resampleWriter) String() string {
 	return fmt.Sprintf("Resample(%d->%d) -> %s", w.srcRate, w.dstRate, w.w.String())
 }
 
-// Output frames of leading silence with WithSteadyResample, and zero without it.
+// Output frames of leading silence with WithSteadyResample, and zero without it. The silence goes out with
+// the first write, so a writer closed before any write emits none.
 func (w *resampleWriter) Lead() int {
 	return w.lead
 }

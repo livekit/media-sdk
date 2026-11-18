@@ -18,6 +18,7 @@ package media_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -38,11 +39,11 @@ func TestResampleWriter8kTo48kLatency(t *testing.T) {
 	require.NoError(t, w.Close())
 }
 
-// A steady stream waits only as long as soxr can hold back, at most 27.7 ms at 8k->48k, where the default
-// writer runs up to two 20 ms frames behind.
+// A steady stream waits only as long as soxr can hold back (27.7 ms at 8k->48k) plus a 0.25 ms margin,
+// where the default writer runs up to two 20 ms frames behind.
 func TestSteadyResampleWriter8kTo48kLead(t *testing.T) {
-	const srcRate, dstRate, maxLeadMs = 8000, 48000, 28
+	const srcRate, dstRate, maxLead = 8000, 48000, 28500 * time.Microsecond
 	w := media.ResampleWriter(media.NewPCM16BufferWriter(new(media.PCM16Sample), dstRate), srcRate, media.WithSteadyResample())
-	require.LessOrEqual(t, w.(interface{ Lead() int }).Lead(), maxLeadMs*dstRate/1000)
+	require.LessOrEqual(t, w.(interface{ Lead() int }).Lead(), int(maxLead.Seconds()*dstRate))
 	require.NoError(t, w.Close())
 }

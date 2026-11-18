@@ -35,6 +35,8 @@ func Resample(dst PCM16Sample, dstSampleRate int, src PCM16Sample, srcSampleRate
 		return append(dst, src...)
 	}
 	opt := newResampleOptions(opts)
+	// One-shot output is not a stream, so there is nothing to keep steady.
+	opt.Steady = false
 	if opt.Predictable {
 		return resampleBufferBeep(dst, dstSampleRate, src, srcSampleRate, &opt)
 	}
@@ -57,7 +59,7 @@ type frameBuffer struct {
 	buf                  PCM16Sample
 	chunks               []int
 	steady               bool
-	frame                int // the latest chunk's size, for splitting what is left at close
+	frame                int // the largest chunk so far, for splitting what is left at close
 	inFrames             int64
 	outEnd               int64
 }
@@ -70,7 +72,7 @@ func (b *frameBuffer) queue(frames int) int {
 	b.outEnd = end
 	if sz > 0 {
 		b.chunks = append(b.chunks, sz)
-		b.frame = sz
+		b.frame = max(b.frame, sz)
 	}
 	return sz
 }
@@ -133,6 +135,11 @@ func (b *frameBuffer) drain(w PCM16Writer) error {
 // Every write is a whole chunk, since encoders take fixed frames (G.722 panics on an odd count). A lead
 // can leave more than a chunk at close, and the last piece is filled out with silence.
 func (b *frameBuffer) drainWhole(w PCM16Writer) error {
+	if b.frame == 0 {
+		// No whole chunk was ever queued, so there is no frame size to keep.
+		b.buf, b.chunks = b.buf[:0], nil
+		return nil
+	}
 	var last error
 	rest := b.buf
 	for len(rest) > 0 {
@@ -140,9 +147,6 @@ func (b *frameBuffer) drainWhole(w PCM16Writer) error {
 		if len(b.chunks) > 0 {
 			sz = b.chunks[0]
 			b.chunks = b.chunks[1:]
-		}
-		if sz <= 0 {
-			sz = len(rest)
 		}
 		if len(rest) < sz {
 			rest = append(rest, make(PCM16Sample, sz-len(rest))...)
@@ -157,6 +161,18 @@ func (b *frameBuffer) drainWhole(w PCM16Writer) error {
 }
 
 type ResampleOption func(opts *resampleOptions)
+
+type leader interface{ Lead() int }
+
+// Keeps a steady writer's Lead visible through the input dump.
+type leadWriter struct {
+	PCM16Writer
+	lead leader
+}
+
+func (w leadWriter) Lead() int {
+	return w.lead.Lead()
+}
 
 func newResampleOptions(opts []ResampleOption) resampleOptions {
 	opt := resampleOptions{Channels: 1}
@@ -181,7 +197,8 @@ func WithResampleChannels(channels int) ResampleOption {
 
 // Makes every write emit exactly its own chunk, with none skipped or doubled. The output starts with
 // silence covering the most soxr can hold back (the writer's Lead, in output frames), and the last chunk
-// at close is filled out with silence.
+// at close is filled out with silence. Read Lead with a checked assertion: a writer without it, such as
+// the sink returned when the rates match, has no lead.
 func WithSteadyResample() ResampleOption {
 	return func(opts *resampleOptions) {
 		opts.Steady = true
@@ -230,7 +247,11 @@ func ResampleWriter(w PCM16Writer, sampleRate int, opts ...ResampleOption) (w2 P
 	}
 	if file := opt.DumpInput; file != "" {
 		defer func() {
-			w2 = DumpWriterPCM16(file, w2)
+			dumped := DumpWriterPCM16(file, w2)
+			if l, ok := w2.(leader); ok {
+				dumped = leadWriter{dumped, l}
+			}
+			w2 = dumped
 		}()
 	}
 	if opt.Predictable {
