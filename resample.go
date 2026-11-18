@@ -56,6 +56,8 @@ type frameBuffer struct {
 	srcRate, dstRate, ch int
 	buf                  PCM16Sample
 	chunks               []int
+	steady               bool
+	frame                int // the latest chunk's size, for splitting what is left at close
 	inFrames             int64
 	outEnd               int64
 }
@@ -68,11 +70,15 @@ func (b *frameBuffer) queue(frames int) int {
 	b.outEnd = end
 	if sz > 0 {
 		b.chunks = append(b.chunks, sz)
+		b.frame = sz
 	}
 	return sz
 }
 
 func (b *frameBuffer) flush(w PCM16Writer) error {
+	if b.steady {
+		return b.flushOne(w)
+	}
 	var last error
 	rest, n := b.buf, 0
 	for n < len(b.chunks) && len(rest) >= b.chunks[n] {
@@ -87,9 +93,24 @@ func (b *frameBuffer) flush(w PCM16Writer) error {
 	return last
 }
 
+// At most one chunk per write. Catching up after a short write would leave no margin for the next one.
+func (b *frameBuffer) flushOne(w PCM16Writer) error {
+	if len(b.chunks) == 0 || len(b.buf) < b.chunks[0] {
+		return nil
+	}
+	sz := b.chunks[0]
+	err := w.WriteSample(b.buf[:sz])
+	b.buf = b.buf[:copy(b.buf, b.buf[sz:])]
+	b.chunks = b.chunks[:copy(b.chunks, b.chunks[1:])]
+	return err
+}
+
 // soxr rounds its total to nearest, so the last chunk absorbs output the queue did not account for.
 // With no chunk left, as when beep rounds up, the remainder goes out alone.
 func (b *frameBuffer) drain(w PCM16Writer) error {
+	if b.steady {
+		return b.drainWhole(w)
+	}
 	var last error
 	rest := b.buf
 	for len(rest) > 0 {
@@ -99,6 +120,32 @@ func (b *frameBuffer) drain(w PCM16Writer) error {
 		}
 		if len(b.chunks) > 0 {
 			b.chunks = b.chunks[1:]
+		}
+		if err := w.WriteSample(rest[:sz]); err != nil {
+			last = err
+		}
+		rest = rest[sz:]
+	}
+	b.buf, b.chunks = b.buf[:0], nil
+	return last
+}
+
+// Every write is a whole chunk, since encoders take fixed frames (G.722 panics on an odd count). A lead
+// can leave more than a chunk at close, and the last piece is filled out with silence.
+func (b *frameBuffer) drainWhole(w PCM16Writer) error {
+	var last error
+	rest := b.buf
+	for len(rest) > 0 {
+		sz := b.frame
+		if len(b.chunks) > 0 {
+			sz = b.chunks[0]
+			b.chunks = b.chunks[1:]
+		}
+		if sz <= 0 {
+			sz = len(rest)
+		}
+		if len(rest) < sz {
+			rest = append(rest, make(PCM16Sample, sz-len(rest))...)
 		}
 		if err := w.WriteSample(rest[:sz]); err != nil {
 			last = err
@@ -132,6 +179,15 @@ func WithResampleChannels(channels int) ResampleOption {
 	}
 }
 
+// Makes every write emit exactly its own chunk, with none skipped or doubled. The output starts with
+// silence covering the most soxr can hold back (the writer's Lead, in output frames), and the last chunk
+// at close is filled out with silence.
+func WithSteadyResample() ResampleOption {
+	return func(opts *resampleOptions) {
+		opts.Steady = true
+	}
+}
+
 func WithPredictableResample(enable bool) ResampleOption {
 	return func(opts *resampleOptions) {
 		opts.Predictable = enable
@@ -148,6 +204,7 @@ func WithResampleDump(inputName, outputName string) ResampleOption {
 type resampleOptions struct {
 	Channels    int
 	Predictable bool
+	Steady      bool
 	DumpInput   string
 	DumpOutput  string
 }
