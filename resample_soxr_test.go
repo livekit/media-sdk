@@ -49,6 +49,28 @@ func TestResampleOptionsKeepDefaults(t *testing.T) {
 	require.IsType(t, (*resampleWriterBeep)(nil), w, "the channels option dropped the defaults")
 }
 
+// A lead that falls short, as it could with another libsoxr build, costs one late write and no more.
+// Catching up would leave no margin for the next short write, so the stream would skip and double writes.
+func TestSteadyResampleSlipsOnceWhenLeadFallsShort(t *testing.T) {
+	const srcRate, dstRate = 11025, 8000
+	var chunks []PCM16Sample
+	w := newResampleWriter(NewPCM16FrameWriter(&chunks, dstRate), srcRate, &resampleOptions{Channels: 1, Steady: true}).(*resampleWriter)
+	w.lead, w.pendingLead = 0, 0
+	in := make(PCM16Sample, srcRate/DefFramesPerSec)
+	started, slips := false, 0
+	for i := range 1500 {
+		before := len(chunks)
+		require.NoError(t, w.WriteSample(in))
+		require.LessOrEqual(t, len(chunks)-before, 1, "write %d", i)
+		if len(chunks) > before {
+			started = true
+		} else if started {
+			slips++
+		}
+	}
+	require.LessOrEqual(t, slips, 1)
+}
+
 // soxr runs under every call's audio, so its cgo out-parameters must not move to the heap on each call.
 // This skips the writer because CI swaps its mutex for go-deadlock's, which allocates on Lock.
 func TestSoxrDoesNotAllocate(t *testing.T) {

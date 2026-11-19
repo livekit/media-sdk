@@ -39,7 +39,7 @@ func newResampleWriterBeep(w WriteCloser[PCM16Sample], sampleRate int, opts *res
 		w:       w,
 		srcRate: srcRate,
 		dstRate: dstRate,
-		out:     frameBuffer{srcRate: srcRate, dstRate: dstRate, ch: opts.Channels},
+		out:     frameBuffer{srcRate: srcRate, dstRate: dstRate, ch: opts.Channels, steady: opts.Steady},
 	}
 	r.r = beepResample(beepQuality, srcRate, dstRate, opts.Channels, r)
 	return r
@@ -53,6 +53,11 @@ type resampleWriterBeep struct {
 	srcRate int
 	dstRate int
 	out     frameBuffer
+}
+
+// beep's one-frame look-ahead already lets every later write emit a chunk, so it needs no lead.
+func (w *resampleWriterBeep) Lead() int {
+	return 0
 }
 
 func (w *resampleWriterBeep) String() string {
