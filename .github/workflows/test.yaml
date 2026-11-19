@@ -54,8 +54,8 @@ jobs:
             go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
             go-${{ runner.os }}-
 
-      - name: Set up gotestfmt
-        run: go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
+      - name: Set up tparse
+        run: go install github.com/mfridman/tparse@ba2512e7be150bfcbd6f6220d517d3741f8f2f75 # v0.18.0
 
       - name: Static Check
         uses: dominikh/staticcheck-action@master
@@ -72,11 +72,13 @@ jobs:
           grep -rl deadlock.RWMutex . | grep .go$ | xargs goimports -w
           go mod tidy
 
-      # Run tests with nice formatting. Save the original log in /tmp/gotest.log
+      # tparse prints failing tests' output and a summary table at the end.
       - name: Run tests
         run: |
           set -euo pipefail
-          go test -json -v ./... 2>&1 | gotestfmt
+          # stderr stays out of the pipe: tparse rejects the whole stream if a
+          # non-JSON line follows the first JSON event.
+          go test -json ./... | tparse -progress
 
       # Only main writes. Pull requests read main's entry, which keeps ~1 GB
       # per PR run out of the repo's 10 GB cache budget.
