@@ -91,11 +91,13 @@ func TestResample(t *testing.T) {
 		Bumps  []int
 	}{
 		{
-			Rate: 16000, Skip: 1,
-			Buffer: 1,
+			Rate: 16000, Skip: 2,
+			// The reserve chunk and the fractional tail now both flush at Close,
+			// landing on the last write's tick.
+			Buffer: 2,
 		},
 		{
-			Rate: 8000, Skip: 1,
+			Rate: 8000, Skip: 2,
 			Buffer: 3,
 		},
 	} {

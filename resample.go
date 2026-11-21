@@ -58,6 +58,11 @@ type frameBuffer struct {
 	chunks               []int
 	inFrames             int64
 	outEnd               int64
+	// pace holds one fully covered chunk back, so a resampler that comes back a few samples
+	// short after warm-up (soxr, #109) pays out of the held chunk instead of blanking a
+	// write's slot. It costs one chunk of stream latency.
+	pace    bool
+	emitted bool
 }
 
 // Zero means the write's output joins the next chunk.
@@ -72,10 +77,39 @@ func (b *frameBuffer) queue(frames int) int {
 	return sz
 }
 
+func (b *frameBuffer) covered() int {
+	s, covered := 0, 0
+	for _, c := range b.chunks {
+		s += c
+		if s > len(b.buf) {
+			break
+		}
+		covered++
+	}
+	return covered
+}
+
 func (b *frameBuffer) flush(w PCM16Writer) error {
+	covered := b.covered()
+	if !b.pace {
+		goto emit
+	}
+	if !b.emitted {
+		// Hold back until two chunks are covered, then start one behind; the held
+		// chunk is the reserve that pays for soxr's late short returns (#109).
+		if covered < 2 {
+			covered = 0
+		} else {
+			covered--
+		}
+		b.emitted = covered > 0
+	} else if covered > 1 {
+		covered--
+	}
+emit:
 	var last error
 	rest, n := b.buf, 0
-	for n < len(b.chunks) && len(rest) >= b.chunks[n] {
+	for n < covered && len(rest) >= b.chunks[n] {
 		if err := w.WriteSample(rest[:b.chunks[n]]); err != nil {
 			last = err
 		}
