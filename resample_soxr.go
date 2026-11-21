@@ -50,7 +50,9 @@ func newResampleWriter(w WriteCloser[PCM16Sample], sampleRate int, opts *resampl
 		w:       w,
 		srcRate: srcRate,
 		dstRate: dstRate,
-		out:     frameBuffer{srcRate: srcRate, dstRate: dstRate, ch: opts.Channels},
+		// soxr's internal delay leaves the first fully covered write a few samples short
+		// at times (#109); the paced flush spends the reserve chunk instead of the slot.
+		out: frameBuffer{srcRate: srcRate, dstRate: dstRate, ch: opts.Channels, pace: true},
 	}
 	quality := int(C.SOXR_LQ)
 	var err error
@@ -114,9 +116,6 @@ func (w *resampleWriter) WriteSample(data PCM16Sample) error {
 	if err != nil {
 		return err
 	}
-	// Resampler will likely return a short buffer in the first run. In that case, we emit no samples on the first call.
-	// This will cause a one frame delay for each resampler. Flushing the sampler, however will lead to frame
-	// discontinuity, and thus - distortions on the frame boundaries.
 	w.out.queue(len(data) / ch)
 	return w.out.flush(w.w)
 }
